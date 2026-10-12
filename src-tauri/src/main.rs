@@ -148,6 +148,11 @@ fn days_needing_labels(p: State<Pipeline>, query: ReportQuery) -> CmdResult<Vec<
     api::days_needing_labels(&p, &query).map_err(err)
 }
 
+#[tauri::command]
+async fn ai_models() -> CmdResult<Vec<devarch::infer::models::ModelInfo>> {
+    tauri::async_runtime::spawn_blocking(api::ai_models).await.map_err(|e| e.to_string())
+}
+
 fn main() {
     let store = Store::open(&default_db_path()).expect("open the local database");
     let pipeline = Pipeline::new(store);
@@ -158,7 +163,7 @@ fn main() {
             status, discover, backfill, day, session_events, projects, confirm_session, exclude_session,
             edit_session, generate_journal, confirm_journal, rebuild_day, save_settings, save_api_key,
             install_shell_hook, report, approve_sessions, approve_confident, set_entry_label, set_ticket,
-            export_toggl_csv, connect_toggl, toggl_projects, send_to_toggl, days_needing_labels
+            export_toggl_csv, connect_toggl, toggl_projects, send_to_toggl, days_needing_labels, ai_models
         ])
         .run(tauri::generate_context!())
         .expect("run the Dev Archaeologist window");

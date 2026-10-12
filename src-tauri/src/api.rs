@@ -298,3 +298,11 @@ pub fn days_needing_labels(p: &Pipeline, q: &ReportQuery) -> Result<Vec<String>>
     days.dedup();
     Ok(days)
 }
+
+/// Models the saved key can use; the known list when there is no key or no network.
+pub fn ai_models() -> Vec<crate::infer::models::ModelInfo> {
+    match journal::api_key() {
+        Some(key) => crate::infer::models::available_models(&key),
+        None => crate::infer::models::known_models(),
+    }
+}

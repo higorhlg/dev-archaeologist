@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Work Schedule Plan</title>
+<link rel="stylesheet" href="htmlplan.css">
+<script src="htmlplan.js" defer></script>
+<style data-mock-shared>
+  .ui { font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1c1b19; background: #fff; border: 1px solid #ddd8cc; border-radius: 10px; overflow: hidden; }
+  .ui .hd { padding: 10px 14px; border-bottom: 1px solid #eee9dd; font-weight: 650; display: flex; justify-content: space-between; align-items: baseline; } .ui .hd small { color: #8a8578; font-weight: 400; }
+  .ui .row { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 9px 14px; border-bottom: 1px solid #f3efe6; align-items: center; } .ui .row small { color: #8a8578; grid-column: 1 / -1; }
+  .ui .ft { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-top: 1px solid #eee9dd; background: #faf8f3; }
+  .ui .btn { font-weight: 600; font-size: 13px; padding: 6px 11px; border-radius: 7px; border: 1px solid #ddd8cc; background: #fff; } .ui .btn.pri { background: #1c1b19; color: #fff; border-color: #1c1b19; }
+  .ui .dim { color: #8a8578; } .ui .ok { color: #1f7a52; font-weight: 650; } .ui .warn { color: #b4541f; font-weight: 600; }
+  .ui .days { display: flex; gap: 4px; } .ui .days span { width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; font-size: 12px; font-weight: 600; border: 1px solid #ddd8cc; } .ui .days .on { background: #1c1b19; color: #fff; border-color: #1c1b19; }
+  .ui .time { border: 1px solid #ddd8cc; border-radius: 6px; padding: 3px 8px; font-variant-numeric: tabular-nums; background: #faf8f3; }
+  .ui .strata { padding: 22px 14px 10px; position: relative; }
+  .ui .axis { position: relative; height: 0; margin-left: 96px; } .ui .axis span { position: absolute; top: -18px; transform: translateX(-50%); font-size: 11px; color: #8a8578; }
+  .ui .lane { display: grid; grid-template-columns: 88px 1fr; gap: 8px; align-items: center; height: 26px; } .ui .lane + .lane { border-top: 1px dashed #eee9dd; }
+  .ui .lane b { font-size: 12px; font-weight: 500; color: #5f5a4f; text-align: right; }
+  .ui .track { position: relative; height: 100%; }
+  .ui .band { position: absolute; top: 6px; height: 14px; border-radius: 3px; background: #b8862f; }
+  .ui .band.blue { background: #4f6a80; }
+  .ui .band.bridge { background: repeating-linear-gradient(135deg, #b8862f 0 4px, #f3e3c2 4px 8px); }
+  .ui .band.gap { background: none; border: 1.5px dashed #b4541f; height: 12px; }
+  .ui .sched { position: absolute; top: 0; bottom: 0; background: rgba(31,122,82,.06); border-left: 1px solid rgba(31,122,82,.35); border-right: 1px solid rgba(31,122,82,.35); }
+  .ui .pop { margin: 4px 14px 12px auto; width: 250px; border: 1px solid #ddd8cc; border-radius: 9px; box-shadow: 0 6px 18px rgba(0,0,0,.12); background: #fff; font-size: 13px; }
+  .ui .pop div { padding: 7px 12px; } .ui .pop div + div { border-top: 1px solid #f3efe6; } .ui .pop .h { font-weight: 650; }
+  .ui .bar { display: flex; height: 12px; border-radius: 3px; overflow: hidden; gap: 2px; margin: 4px 14px 10px; }
+  .ui .bar i { display: block; } .ui .bar .o { background: #b8862f; } .ui .bar .b { background: repeating-linear-gradient(135deg, #b8862f 0 4px, #f3e3c2 4px 8px); } .ui .bar .u { background: none; border: 1.5px dashed #b4541f; }
+  .ui .line { padding: 10px 14px 2px; color: #5f5a4f; } .ui .line b { color: #1c1b19; }
+</style>
+<body>
+
+<header>
+  <h1>Work Schedule Gaps in Dev Archaeologist</h1>
+  <doc-changes new="3" changed="11"></doc-changes>
+  <details class="thread"><summary>Why · 1 request</summary>
+    <doc-quote via="prompt" from="the user">could we maybe do a quick onboarding like where we ask the user if he has a fixed working schedule like 8 to 5 so the app can try to identify fill in the gaps to match the time the user was supposed to be working like maybe consider a bit more time where no prompt window was no moving but user was likely still working</doc-quote>
+  </details>
+</header>
+
+<main>
+<doc-plan>
+
+<!-- ═════ 1 · schedule ═════ -->
+<doc-claim>
+  <p>During onboarding, the user can give work hours or skip this step.</p>
+  <doc-mock frame="none" w="440" caption="This step comes after the history scan. Sources can change it later."><template>
+<div class="ui">
+  <div class="hd">Do you keep regular hours? <small>optional</small></div>
+  <div class="row"><span>Work days</span><span class="days"><span class="on">M</span><span class="on">T</span><span class="on">W</span><span class="on">T</span><span class="on">F</span><span>S</span><span>S</span></span></div>
+  <div class="row" data-ref="hours"><span>Hours</span><span><span class="time">08:00</span> to <span class="time">17:00</span></span></div>
+  <div class="row" data-ref="lunch"><span>Lunch</span><span><span class="time">12:00</span> to <span class="time">13:00</span></span></div>
+  <div class="row"><span>Time zone</span><span class="dim">America/Sao_Paulo</span></div>
+  <div class="ft"><span class="btn pri">Use these hours</span><span class="btn">My hours change</span></div>
+</div></template>
+    <doc-pin ref="hours" anchor="l" title="Same hours each work day">See decision 1.</doc-pin>
+    <doc-pin ref="lunch" anchor="r" title="Lunch is never filled"></doc-pin>
+  </doc-mock>
+  <doc-ask id="shape">
+    <p>Which schedule shape does the first build support?</p>
+    <label><input type="radio" name="shape" value="uniform" checked> One range for all work days, with a lunch break <small>covers 8 to 5 jobs; quick to answer</small></label>
+    <label><input type="radio" name="shape" value="per_day"> Different hours for each weekday <small>seven rows on the onboarding screen</small></label>
+    <label><input type="radio" name="shape" value="no_lunch"> One range, no lunch break <small>lunch gaps become unaccounted blocks</small></label>
+  </doc-ask>
+
+  <doc-claim>
+    <p>Settings keep the schedule as days, a range and breaks.</p>
+    <doc-schema id="schedule" lang="rust" title="src-tauri/src/settings.rs · WorkSchedule (sketch)" caption="No schedule means the app fills nothing.">
+<script type="text/plain">
+pub struct Settings {
+    // … 8 more fields
+    pub schedule: Option<WorkSchedule>,   // None: the user skipped the step
+}
+
+pub struct WorkSchedule {
+    pub days: Vec<chrono::Weekday>,       // Mon..=Fri
+    pub start: NaiveTime,                 // 08:00, local time
+    pub end: NaiveTime,                   // 17:00
+    pub breaks: Vec<(NaiveTime, NaiveTime)>, // [(12:00, 13:00)]
+    pub bridge_max_min: i64,              // 45
+}
+</script>
+    </doc-schema>
+  </doc-claim>
+
+  <doc-claim>
+    <p>The onboarding screen saves the schedule before the timeline opens.</p>
+    <doc-calls title="Onboarding" caption="The scan step stays as it is.">
+<script type="text/plain">
+~ <Onboarding/>                                @ ui/src/Onboarding.tsx:16
++   <**ScheduleStep**/>                         @ ui/src/ScheduleStep.tsx:1
++     api.saveSettings({ …settings, schedule }) @ ui/src/api.ts:150
+~ <Sources/>                                   @ ui/src/Sources.tsx:1
++   <**ScheduleStep** compact/>                 @ ui/src/ScheduleStep.tsx:1
+</script>
+    </doc-calls>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ 2 · gap kinds ═════ -->
+<doc-claim>
+  <p>Inside work hours, the app puts each quiet gap into one of three kinds.</p>
+  <doc-machine name="gap" caption="A gap outside work hours or in a break stays a plain gap.">
+<script type="text/plain">
+machine gap initial quiet
+state quiet               # No prompt, commit, command or file change for 15 min.
+state at_computer final   # Keyboard or mouse input during the gap.
+state bridged             # Short idle gap between two work sessions.
+state unaccounted         # Long idle gap. The user must decide.
+state approved final      # The user approved the bridge.
+state assigned final      # The user gave the block a project or a label.
+state not_work final      # The user marked the block as not work.
+
+| quiet       | bridged     | approved |
+| at_computer | unaccounted | assigned |
+| .           | .           | not_work |
+
+quiet -input->        at_computer : input
+quiet -short->        bridged     : ≤ cap
+quiet -long->         unaccounted : > cap
+bridged -approve->    approved    : Approve
+bridged -reject->     unaccounted : Reject
+unaccounted -assign-> assigned    : Assign
+unaccounted -skip->   not_work    : Not work
+</script>
+    <div data-state="quiet"><doc-mock frame="none" w="420"><template><div class="ui"><div class="strata"><div class="lane"><b>web-frontend</b><div class="track"><span class="band" style="left:2%;width:30%"></span><span class="band" style="left:58%;width:38%"></span></div></div></div></div></template></doc-mock></div>
+    <div data-state="at_computer"><doc-mock frame="none" w="420"><template><div class="ui"><div class="strata"><div class="lane"><b>web-frontend</b><div class="track"><span class="band" style="left:2%;width:94%"></span></div></div></div><div class="line">Slack and Chrome were in front. The session runs through the gap.</div><div style="height:10px"></div></div></template></doc-mock></div>
+    <div data-state="bridged"><doc-mock frame="none" w="420"><template><div class="ui"><div class="strata"><div class="lane"><b>web-frontend</b><div class="track"><span class="band" style="left:2%;width:30%"></span><span class="band bridge" style="left:32%;width:26%"></span><span class="band" style="left:58%;width:38%"></span></div></div></div><div class="line">25 min bridged, <span class="warn">not approved</span></div><div style="height:10px"></div></div></template></doc-mock></div>
+    <div data-state="unaccounted"><doc-mock frame="none" w="420"><template><div class="ui"><div class="strata"><div class="lane"><b>web-frontend</b><div class="track"><span class="band" style="left:2%;width:20%"></span><span class="band gap" style="left:22%;width:50%"></span><span class="band" style="left:72%;width:24%"></span></div></div></div><div class="line">1 h 30 min unaccounted. Tap to assign.</div><div style="height:10px"></div></div></template></doc-mock></div>
+    <div data-state="approved"><doc-mock frame="none" w="420"><template><div class="ui"><div class="strata"><div class="lane"><b>web-frontend</b><div class="track"><span class="band" style="left:2%;width:94%"></span></div></div></div><div class="line"><span class="ok">Approved</span>, 25 min bridged time included</div><div style="height:10px"></div></div></template></doc-mock></div>
+    <div data-state="assigned"><doc-mock frame="none" w="420"><template><div class="ui"><div class="strata"><div class="lane"><b>web-frontend</b><div class="track"><span class="band" style="left:2%;width:20%"></span><span class="band" style="left:72%;width:24%"></span></div></div><div class="lane"><b>Meetings</b><div class="track"><span class="band blue" style="left:22%;width:50%"></span></div></div></div></div></template></doc-mock></div>
+    <div data-state="not_work"><doc-mock frame="none" w="420"><template><div class="ui"><div class="strata"><div class="lane"><b>web-frontend</b><div class="track"><span class="band" style="left:2%;width:20%"></span><span class="band" style="left:72%;width:24%"></span></div></div></div><div class="line dim">The gap is not work. It is not counted.</div><div style="height:10px"></div></div></template></doc-mock></div>
+  </doc-machine>
+
+  <doc-claim>
+    <p>A fixed rule picks the kind from the input and the gap length.</p>
+    <doc-code title="sessions/gaps.rs · sketch" lang="rust" hl="8,10,12">
+<script type="text/plain">
+pub fn classify_gap(gap: Interval, events: &[&WorkEvent], s: &WorkSchedule) -> Option<GapKind> {
+    let inside = s.work_part(gap)?;              // clip to hours, remove breaks
+    if inside.minutes() < 15 {
+        return None;                             // short pauses stay inside sessions
+    }
+    let input = minus(&[inside], &idle_intervals(events));
+    match () {
+        _ if total_ms(&input) * 2 >= inside.ms() => Some(GapKind::AtComputer),
+        _ if inside.minutes() <= s.bridge_max_min && same_day_work_on_both_sides(gap, events)
+            => Some(GapKind::Bridged),
+        _ => Some(GapKind::Unaccounted),
+    }
+}
+</script>
+      <doc-pin line="8" title="Half the gap with input">The user sat at the computer.</doc-pin>
+    </doc-code>
+    <doc-ask id="cap">
+      <p>What is the longest idle gap that the app bridges?</p>
+      <div class="opts-row">
+        <label><input type="radio" name="cap" value="30"> 30 min</label>
+        <label><input type="radio" name="cap" value="45" checked> 45 min</label>
+        <label><input type="radio" name="cap" value="60"> 60 min</label>
+      </div>
+    </doc-ask>
+    <doc-note tone="info">History before install has no keyboard or mouse data. Old days get only bridged and unaccounted gaps.</doc-note>
+  </doc-claim>
+
+  <doc-claim>
+    <p>A bridged gap gives its minutes to the session after it.</p>
+    <doc-code title="sessions/gaps.rs · sketch" lang="rust">
+<script type="text/plain">
+pub fn attribute_bridge(gap: Interval, before: &Session, after: &Session) -> Vec<(String, i64)> {
+    if before.project == after.project {
+        vec![(after.id.clone(), gap.minutes())]
+    } else {
+        let half = gap.minutes() / 2;
+        vec![(before.id.clone(), half), (after.id.clone(), gap.minutes() - half)]
+    }
+}
+</script>
+    </doc-code>
+    <doc-ask id="attrib">
+      <p>Which session gets the minutes of a bridged gap?</p>
+      <label><input type="radio" name="attrib" value="next_or_split" checked> The next session if both are one project, else split <small>reading often comes before the next prompt</small></label>
+      <label><input type="radio" name="attrib" value="previous"> Always the session before the gap</label>
+      <label><input type="radio" name="attrib" value="split"> Always split at the middle</label>
+    </doc-ask>
+  </doc-claim>
+
+  <doc-claim>
+    <p>Each rebuild of a day stores its gaps next to its sessions.</p>
+    <doc-calls title="Rebuild" caption="The rebuild runs once a minute for today.">
+<script type="text/plain">
+~ rebuild_day(day)                             @ src-tauri/src/pipeline.rs:52
+    cluster_sessions(day, events)              @ src-tauri/src/sessions/cluster.rs:16
++   **find_gaps**(sessions, events, schedule)  @ src-tauri/src/sessions/gaps.rs:1
++   **classify_gap**(gap, events, schedule)    @ src-tauri/src/sessions/gaps.rs:20
++   store.replace_day_gaps(day, gaps)          @ src-tauri/src/store.rs:200   -- keeps gaps the user resolved
+</script>
+    </doc-calls>
+    <doc-claim at="src-tauri/src/sessions/cluster.rs:16">
+      <p><b>cluster.rs:16</b> · cluster_sessions()</p>
+      <doc-code src="src-tauri/src/sessions/cluster.rs" lines="16-30"></doc-code>
+    </doc-claim>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ 3 · day view ═════ -->
+<doc-claim>
+  <p>The day view shows bridged time and unaccounted blocks inside work hours.</p>
+  <doc-mock frame="none" w="460" caption="The green tint shows the work hours. Hatched is bridged. Dashed is unaccounted."><template>
+<div class="ui">
+  <div class="strata">
+    <div class="axis"><span style="left:0%">8</span><span style="left:25%">10</span><span style="left:50%">12</span><span style="left:75%">14</span><span style="left:100%">16</span></div>
+    <div class="lane"><b>web-frontend</b><div class="track"><span class="sched" style="left:0;width:100%"></span><span class="band" style="left:2%;width:16%"></span><span class="band bridge" style="left:18%;width:7%"></span><span class="band" style="left:25%;width:14%"></span></div></div>
+    <div class="lane"><b>order-prep</b><div class="track"><span class="sched" style="left:0;width:100%"></span><span class="band blue" style="left:62%;width:20%"></span></div></div>
+    <div class="lane" data-ref="un"><b>Unaccounted</b><div class="track"><span class="band gap" style="left:39%;width:9%"></span><span class="band gap" style="left:82%;width:14%"></span></div></div>
+  </div>
+  <div class="pop" data-ref="pop">
+    <div class="h">10:40 to 11:15, 35 min</div>
+    <div>web-frontend</div>
+    <div>Meetings</div>
+    <div>Code review</div>
+    <div class="dim">Not work</div>
+  </div>
+</div></template>
+    <doc-pin ref="un" anchor="l" title="One lane for open blocks"></doc-pin>
+    <doc-pin ref="pop" anchor="tl" title="One tap assigns the block">The list starts with the projects next to the gap.</doc-pin>
+  </doc-mock>
+
+  <doc-claim>
+    <p>The user can assign or dismiss an unaccounted block with one tap.</p>
+    <doc-calls title="Assign a block" caption="An assigned block becomes a confirmed session.">
+<script type="text/plain">
+~ <Strata/>                                    @ ui/src/Timeline.tsx:88
++   <**GapBlock**/>                            @ ui/src/Timeline.tsx:140
++     api.resolveGap(id, { project | label | not_work })  @ ui/src/api.ts:150
++ **resolve_gap**(id, resolution)              @ src-tauri/src/api.rs:300
++   store.insert_manual_session(…)             @ src-tauri/src/store.rs:200   -- state confirmed
+</script>
+    </doc-calls>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ 4 · reports ═════ -->
+<doc-claim>
+  <p>Reports compare observed, bridged and unaccounted time with the schedule.</p>
+  <doc-mock frame="none" w="460"><template>
+<div class="ui">
+  <div class="hd">Thursday 8 October <small>schedule 8 h</small></div>
+  <div class="line"><b>6 h 10 min</b> observed, <b>50 min</b> bridged, <span class="warn">1 h 30 min unaccounted</span></div>
+  <div class="bar"><i class="o" style="flex:370"></i><i class="b" style="flex:50"></i><i class="u" style="flex:90"></i></div>
+  <div class="ft"><span class="btn" data-ref="fill">Fill to schedule…</span><span class="btn">Approve bridges</span><span class="dim" style="margin-left:auto">bridges not approved</span></div>
+</div></template>
+    <doc-pin ref="fill" anchor="bl" title="Asks for a project first">See 4.2.</doc-pin>
+  </doc-mock>
+
+  <doc-claim>
+    <p>Bridged minutes count in an entry only after the user approves them.</p>
+    <doc-code title="reports.rs · sketch" lang="rust">
+<script type="text/plain">
+fn entry_minutes(group: &[&Loaded]) -> (i64, i64) {
+    let observed: i64 = group.iter().map(|l| l.report_min).sum();
+    let bridged: i64 = group.iter().map(|l| l.bridge_min).sum();
+    let approved = group.iter().all(|l| l.bridges_approved);
+    (observed + if approved { bridged } else { 0 }, bridged)
+}
+</script>
+    </doc-code>
+    <doc-claim at="src-tauri/src/reports.rs:129">
+      <p><b>reports.rs:129</b> · share_parallel_minutes()</p>
+      <doc-code src="src-tauri/src/reports.rs" lines="126-150"></doc-code>
+    </doc-claim>
+  </doc-claim>
+
+  <doc-claim>
+    <p>“Fill to schedule” moves unaccounted time to a project the user picks.</p>
+    <doc-mock frame="none" w="400"><template>
+<div class="ui">
+  <div class="hd">Fill 1 h 30 min on 8 October</div>
+  <div class="row"><span>web-frontend</span><span class="dim">most time today</span></div>
+  <div class="row"><span>General / Meetings</span><span class="dim">default</span></div>
+  <div class="row"><span class="dim">Choose another project…</span><span></span></div>
+  <div class="ft"><span class="btn pri">Fill 1 h 30 min</span><span class="btn">Cancel</span></div>
+</div></template></doc-mock>
+    <doc-ask id="fill">
+      <p>Does “Fill to schedule” offer a default project?</p>
+      <label><input type="radio" name="fill" value="offer" checked> Offer a default the user sets, never apply it alone <small>one tap after the first setup</small></label>
+      <label><input type="radio" name="fill" value="manual"> No default; the user picks each time</label>
+      <label><input type="radio" name="fill" value="none"> No fill action <small>claim 4.2 goes; blocks are assigned one by one</small></label>
+    </doc-ask>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ shared · not changing ═════ -->
+<doc-claim aux="shared">
+  <p>Shared: one new table for gaps.</p>
+  <doc-schema id="gaps" lang="sql" title="src-tauri/migrations/0001_init.sql · work_gaps (sketch)" caption="A resolved gap keeps its row across rebuilds.">
+<script type="text/plain">
+CREATE TABLE IF NOT EXISTS work_gaps (
+  id          TEXT PRIMARY KEY,        -- stable hash of day and start
+  day         TEXT NOT NULL,
+  start_ts    INTEGER NOT NULL,
+  end_ts      INTEGER NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('at_computer','bridged','unaccounted')),
+  state       TEXT NOT NULL CHECK (state IN ('open','approved','assigned','not_work')),
+  session_ids TEXT,                    -- JSON: sessions that get the minutes
+  project     TEXT,                    -- set when the user assigns the block
+  label       TEXT
+);
+CREATE INDEX IF NOT EXISTS work_gaps_day ON work_gaps (day);
+</script>
+  </doc-schema>
+</doc-claim>
+
+<doc-claim aux="scope">
+  <p>Not changing: observed time, session rules, Toggl send.</p>
+  <ul>
+    <li>Observed minutes stay as they are. Gaps add to them; they never replace them.</li>
+    <li>Work outside the schedule still counts, because it is observed.</li>
+    <li>No calendar. A later Google Calendar link can explain meeting gaps with evidence.</li>
+    <li>The Toggl send keeps its approval step.</li>
+  </ul>
+</doc-claim>
+
+</doc-plan>
+</main>
+</body>
+</html>

@@ -186,6 +186,8 @@ input[role="switch"]:checked::after { left: 16px; }
 .hook p { margin-top: 8px; font-size: 13px; color: var(--ink-2); }
 .hook .copy { user-select: all; }
 .area { display: grid; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+.area select { border: 1px solid var(--rule); border-radius: 7px; padding: 6px 8px; background: var(--paper); font-weight: 400; color: var(--ink); }
+.area small { font-weight: 400; }
 .area textarea, .area input { border: 1px solid var(--rule); border-radius: 7px; padding: 7px 9px; background: var(--paper); font-weight: 400; color: var(--ink); resize: vertical; }
 .area .inline { display: flex; gap: 8px; }
 .area .inline input { flex: 1; }

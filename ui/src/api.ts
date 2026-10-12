@@ -105,6 +105,7 @@ export type Report = {
   known_prefixes: string[];
   parallel_min: number;
 };
+export type ModelInfo = { id: string; display_name: string; note: string };
 export type TogglAccount = { email: string; workspace_id: number };
 export type TogglProjectInfo = { id: number; name: string; active: boolean };
 export type SendResult = { sent: number; already_sent: number; failed: string[] };
@@ -146,6 +147,7 @@ export const api = {
   connectToggl: (token: string) => invoke<TogglAccount>("connect_toggl", { token }),
   togglProjects: () => invoke<TogglProjectInfo[]>("toggl_projects"),
   sendToToggl: (query: ReportQuery) => invoke<SendResult>("send_to_toggl", { query }),
+  aiModels: () => invoke<ModelInfo[]>("ai_models"),
   daysNeedingLabels: (query: ReportQuery) => invoke<string[]>("days_needing_labels", { query }),
 };
 

@@ -5,6 +5,16 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.3.0] - 2026-10-12
+
+### Added
+- Model picker in Sources for every AI feature, listing the models the saved key can
+  use with structured outputs (from the Models API, with a built-in list as fallback).
+- Server-side refusal fallback (`fallbacks: "default"`) on models that support it.
+
+### Changed
+- Claude Sonnet 5.5 is the default model, at medium effort.
+
 ## [0.2.0] - 2026-10-12
 
 ### Added

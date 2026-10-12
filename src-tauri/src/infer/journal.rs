@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::digest::{self, SessionDigest};
+use super::models;
 use crate::settings::Settings;
 use crate::store::{Journal, JournalLine, Store};
 
@@ -77,25 +78,31 @@ pub fn has_api_key() -> bool {
 }
 
 fn call_model(model: &str, key: &str, digest: &SessionDigest) -> Result<ModelOutput> {
-    let body = json!({
+    let fallback = models::supports_default_fallback(model);
+    let mut body = json!({
         "model": model,
         "max_tokens": 16000,
         "system": SYSTEM_PROMPT,
-        "output_config": {"effort": "low", "format": {"type": "json_schema", "schema": output_schema()}},
+        "output_config": {"effort": "medium", "format": {"type": "json_schema", "schema": output_schema()}},
         "messages": [{"role": "user", "content": serde_json::to_string(digest)?}],
     });
+    if fallback {
+        body["fallbacks"] = json!("default");
+    }
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(180)))
         .http_status_as_error(false)
         .build()
         .into();
-    let mut resp = agent
+    let mut req = agent
         .post(API_URL)
         .header("x-api-key", key)
         .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .send_json(&body)
-        .context("call the Claude API")?;
+        .header("content-type", "application/json");
+    if fallback {
+        req = req.header("anthropic-beta", models::FALLBACK_BETA);
+    }
+    let mut resp = req.send_json(&body).context("call the Claude API")?;
     let status = resp.status().as_u16();
     let v: Value = resp.body_mut().read_json()?;
     if status != 200 {

@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::reports::{Grouping, TicketMode};
 use crate::store::Store;
 
-pub const DEFAULT_MODEL: &str = "claude-haiku-5-5";
+/// The model every AI feature uses unless the user picks another in Sources.
+pub const DEFAULT_MODEL: &str = "claude-sonnet-5-5";
 
 /// What the user allows the app to collect and where it may send the daily digest.
 #[derive(Debug, Clone, Serialize, Deserialize)]

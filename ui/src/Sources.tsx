@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { api, type Settings, type Status } from "./api";
+import { useEffect, useState } from "react";
+import { api, type ModelInfo, type Settings, type Status } from "./api";
 
 type Toggle = { key: keyof Settings["sources"]; label: string; note: string; disabled?: boolean };
 
@@ -102,19 +102,16 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
       </section>
 
       <section>
-        <h2>Journal writing</h2>
+        <h2>AI features</h2>
         <p className="muted">
-          The journal sends one short, redacted summary per day to the Claude API: session times, project and branch names,
+          The journal and AI labels send one short, redacted summary per day to the Claude API: session times, project and branch names,
           commit subjects, test counts and the first 200 characters of your prompts, with secrets removed. Raw logs, file contents and command output stay here.
         </p>
         <label className="area">
           Projects that never leave this Mac, one per line
           <textarea rows={2} value={optOut} onChange={(e) => setOptOut(e.target.value)} />
         </label>
-        <label className="area">
-          Model
-          <input value={s.model} onChange={(e) => setS({ ...s, model: e.target.value })} />
-        </label>
+        <ModelPicker value={s.model} onChange={(model) => setS({ ...s, model })} />
         <label className="area">
           Claude API key {status.has_api_key && <span className="tag ok">Saved</span>}
           <span className="inline">
@@ -153,5 +150,27 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
         {saved && <span className="muted">{saved}</span>}
       </footer>
     </div>
+  );
+}
+
+/** Every AI feature uses this model. The list comes from the models the saved key can use. */
+function ModelPicker({ value, onChange }: { value: string; onChange: (model: string) => void }) {
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  useEffect(() => {
+    api.aiModels().then(setModels).catch(() => setModels([]));
+  }, []);
+  const options = models.some((m) => m.id === value) ? models : [{ id: value, display_name: value, note: "" }, ...models];
+  const note = options.find((m) => m.id === value)?.note;
+
+  return (
+    <label className="area">
+      Model for the journal and labels
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map((m) => (
+          <option key={m.id} value={m.id}>{m.display_name}</option>
+        ))}
+      </select>
+      {note && <small className="muted">{note}</small>}
+    </label>
   );
 }
