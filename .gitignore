@@ -1,0 +1,8 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+plan.packed.html
+.DS_Store
+*.db
+*.db-*

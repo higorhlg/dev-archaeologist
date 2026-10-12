@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Dev Archaeologist Plan</title>
+<link rel="stylesheet" href="htmlplan.css">
+<script src="htmlplan.js" defer></script>
+<style data-mock-shared>
+  .ui { font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1c1b19; background: #fff; border: 1px solid #ddd8cc; border-radius: 10px; overflow: hidden; }
+  .ui .hd { padding: 10px 14px; border-bottom: 1px solid #eee9dd; font-weight: 650; display: flex; gap: 8px; align-items: baseline; justify-content: space-between; } .ui .hd small { color: #8a8578; font-weight: 400; }
+  .ui .row { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 9px 14px; border-bottom: 1px solid #f3efe6; align-items: center; } .ui .row small { color: #8a8578; grid-column: 1 / -1; }
+  .ui .tog { width: 30px; height: 17px; border-radius: 9px; background: #1f7a52; position: relative; } .ui .tog::after { content: ""; position: absolute; right: 2px; top: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; }
+  .ui .tog.off { background: #cfc9bc; } .ui .tog.off::after { right: auto; left: 2px; }
+  .ui .ft { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-top: 1px solid #eee9dd; background: #faf8f3; }
+  .ui .btn { font-weight: 600; font-size: 13px; padding: 6px 11px; border-radius: 7px; border: 1px solid #ddd8cc; background: #fff; } .ui .btn.pri { background: #1c1b19; color: #fff; border-color: #1c1b19; }
+  .ui .num { font-variant-numeric: tabular-nums; font-weight: 650; }
+  .ui .ok { color: #1f7a52; font-weight: 650; } .ui .dim { color: #8a8578; } .ui .warn { color: #b4541f; font-weight: 600; }
+  .ui .sess { display: grid; grid-template-columns: 74px 1fr; gap: 0 12px; padding: 10px 14px; border-bottom: 1px solid #f3efe6; }
+  .ui .sess .t { color: #8a8578; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .ui .sess b { display: block; } .ui .sess .p { font-size: 12.5px; color: #5f5a4f; }
+  .ui .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; } .ui .chip { font-size: 11.5px; padding: 2px 7px; border-radius: 10px; background: #f3efe6; color: #5f5a4f; }
+  .ui .conf { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #e6f2ec; color: #1f7a52; font-weight: 600; } .ui .conf.lo { background: #fbeee2; color: #b4541f; }
+  .ui .badge { display: flex; gap: 10px; align-items: center; margin: 10px 14px; padding: 9px 12px; border: 1px solid #e8d9b0; background: #fdf8ea; border-radius: 9px; } .ui .badge .ic { font-size: 22px; } .ui .badge small { display: block; color: #8a8578; }
+  .ui .j { padding: 10px 14px; color: #3a372f; } .ui .j p { margin: 0 0 8px; } .ui .j sup { color: #2b6cb0; font-size: 10px; }
+  .ui .bars { padding: 10px 14px; display: grid; grid-template-columns: 110px 1fr; gap: 7px 10px; font-size: 12.5px; align-items: center; }
+  .ui .lane { position: relative; height: 12px; background: #f6f3ec; border-radius: 3px; } .ui .lane i { position: absolute; top: 0; height: 12px; border-radius: 3px; background: #6b8fd6; }
+</style>
+<body>
+
+<header>
+  <h1>Dev Archaeologist Local Work Journal</h1>
+  <doc-changes new="23"></doc-changes>
+  <details class="thread"><summary>Why · 4 requests</summary>
+    <doc-quote via="prompt" from="the user">An AI that studies your coding sessions, Git commits, terminal history, and Claude Code logs, then reconstructs what you worked on. Generate a daily engineering journal, project timeline, and quirky achievements like "Fixed three bugs caused by one typo."</doc-quote>
+    <doc-quote via="doc" from="product context">Your computer already knows what you worked on. We turn that evidence into your work history.</doc-quote>
+    <doc-quote via="doc" from="product context">Can we install a lightweight application, let a programmer work normally, and reconstruct an accurate, useful description of their day without requiring any external integrations?</doc-quote>
+    <doc-quote via="doc" from="product context">The AI should not invent metrics, responsibilities, outcomes, or duration precision.</doc-quote>
+  </details>
+</header>
+
+<main>
+<doc-plan>
+
+<!-- ═════ 1 · backfill ═════ -->
+<doc-claim>
+  <p>On first launch, the app rebuilds the last weeks from local logs.</p>
+  <doc-mock frame="none" w="440" caption="The counts are real. They come from this Mac on 2026-10-09."><template>
+<div class="ui">
+  <div class="hd">We found your past work <small>last 90 days</small></div>
+  <div class="row"><span>Claude Code sessions <span class="dim">· 3 profiles</span></span><span class="num">327</span></div>
+  <div class="row"><span>Codex sessions</span><span class="num">98</span></div>
+  <div class="row" data-ref="git"><span>Git repositories <span class="dim">· ~/code</span></span><span class="num">21</span></div>
+  <div class="row"><span>Terminal history</span><span class="warn">no timestamps</span><small>Your ~/.zsh_history has no times. Live capture starts today.</small></div>
+  <div class="ft"><span class="btn pri" data-ref="go">Rebuild my history</span><span class="btn">Choose folders…</span></div>
+</div></template>
+    <doc-pin ref="git" anchor="l" title="No GitHub login">Reads .git folders only.</doc-pin>
+    <doc-pin ref="go" anchor="r" title="Runs on this machine">No upload during backfill.</doc-pin>
+  </doc-mock>
+
+  <doc-claim>
+    <p>Each source has one adapter that turns its files into WorkEvents.</p>
+    <doc-calls title="Backfill" caption="Each adapter is versioned. An unknown log format skips the file and logs a warning.">
+<script type="text/plain">
++ **backfill**(since)                                   @ src-tauri/src/backfill.rs:12
++   **discover_repos**(roots)                           @ src-tauri/src/adapters/git.rs:20
++   **GitAdapter**::scan(repo, since)                   @ src-tauri/src/adapters/git.rs:48   -- commits, branches, numstat
++   **ClaudeCodeAdapter**::scan(~/.claude*/projects)    @ src-tauri/src/adapters/claude_code.rs:30
++   **CodexAdapter**::scan(~/.codex/sessions)           @ src-tauri/src/adapters/codex.rs:28
++   **redact**(event)                                   @ src-tauri/src/redact.rs:15
++   store.insert_events(batch)                          @ src-tauri/src/store.rs:40   -- dedupe on (source, source_id)
++   **cluster_sessions**(day)                           @ src-tauri/src/sessions/cluster.rs:18
+</script>
+    </doc-calls>
+    <doc-ask id="agents">
+      <p>Which AI-agent adapters ship in the first build?</p>
+      <label><input type="radio" name="agents" value="both" checked> Claude Code and Codex <small>both formats checked on this Mac</small></label>
+      <label><input type="radio" name="agents" value="claude"> Claude Code only</label>
+      <label><input type="radio" name="agents" value="codex"> Codex only</label>
+    </doc-ask>
+    <doc-claim at="src-tauri/src/adapters/claude_code.rs:30">
+      <p><b>claude_code.rs:30</b> · ClaudeCodeAdapter::scan()</p>
+      <doc-code title="claude_code.rs · sketch" lang="rust" hl="9-14">
+<script type="text/plain">
+/// One JSONL file per session. Field names checked against Claude Code logs on 2026-10-09.
+pub fn scan(root: &Path, since: DateTime<Utc>) -> Result<Vec<WorkEvent>> {
+    let mut out = Vec::new();
+    for file in glob_sessions(root)? {
+        for line in read_lines(&file)? {
+            let Ok(rec) = serde_json::from_str::<RawRecord>(&line) else { continue };
+            if rec.timestamp < since { continue; }
+            out.push(WorkEvent {
+                source: "claude_code",
+                source_id: rec.uuid,
+                ts: rec.timestamp,
+                cwd: rec.cwd,
+                branch: rec.git_branch,
+                kind: kind_of(&rec),            // prompt | tool_use | ai_title
+                detail: allowed_detail(&rec),   // first 200 chars of a prompt, tool name, title
+                ..Default::default()
+            });
+        }
+    }
+    Ok(out)
+}
+</script>
+        <doc-pin line="15" tone="warn" title="Never the tool output">Tool output can hold file contents and secrets.</doc-pin>
+      </doc-code>
+    </doc-claim>
+  </doc-claim>
+
+  <doc-claim>
+    <p>The Codex adapter reads one rollout file for each session.</p>
+    <doc-code title="codex.rs · sketch" lang="rust">
+<script type="text/plain">
+// ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+// session_meta     → cwd, id, timestamp          → agent_session_started
+// event_msg/task_started, task_complete          → agent_task_started / _completed
+// response_item/function_call                    → tool_use (name only)
+// response_item/message (role = user)            → prompt (first 200 chars)
+match (rec.r#type.as_str(), rec.payload_type()) {
+    ("session_meta", _)                 => meta_event(&rec),
+    ("event_msg", Some("task_started")) => task_event(&rec, Kind::AgentTaskStarted),
+    ("event_msg", Some("task_complete"))=> task_event(&rec, Kind::AgentTaskCompleted),
+    ("response_item", Some("function_call")) => tool_event(&rec),
+    ("response_item", Some("message"))  => prompt_event(&rec),
+    _ => None,
+}
+</script>
+    </doc-code>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ 2 · live capture ═════ -->
+<doc-claim>
+  <p>While the user works, each enabled source records evidence.</p>
+  <doc-mock frame="none" w="440"><template>
+<div class="ui">
+  <div class="hd">Sources <small>all data stays on this Mac</small></div>
+  <div class="row"><span>Foreground app</span><span class="tog"></span></div>
+  <div class="row" data-ref="titles"><span>Window titles</span><span class="tog off"></span><small>Titles can show email subjects and chat names.</small></div>
+  <div class="row"><span>File changes <span class="dim">· 21 repos</span></span><span class="tog"></span></div>
+  <div class="row"><span>Git</span><span class="tog"></span></div>
+  <div class="row"><span>Claude Code · Codex</span><span class="tog"></span></div>
+  <div class="row" data-ref="term"><span>Terminal <span class="dim">· zsh hook</span></span><span class="tog"></span><small>Command name, exit code, folder. Not the arguments.</small></div>
+  <div class="row"><span>Excluded paths</span><span class="dim">~/Documents/private, *.env</span></div>
+</div></template>
+    <doc-pin ref="titles" anchor="r" title="Off by default">The user turns it on.</doc-pin>
+    <doc-pin ref="term" anchor="r" title="See 2.2"></doc-pin>
+  </doc-mock>
+
+  <doc-claim>
+    <p>One background daemon runs all collectors and writes to one SQLite file.</p>
+    <doc-calls title="Live collectors (macOS)" caption="Each collector sends WorkEvents to one channel. One writer task owns the database.">
+<script type="text/plain">
++ **main**()                                            @ src-tauri/src/main.rs:10
++   **Foreground**::run(tx)                             @ src-tauri/src/collectors/foreground.rs:22   -- NSWorkspace app change, idle via CGEventSource
++   **FileWatch**::run(tx, repos)                       @ src-tauri/src/collectors/files.rs:18   -- FSEvents through the notify crate
++   **GitWatch**::run(tx, repos)                        @ src-tauri/src/adapters/git.rs:90   -- watches HEAD and refs
++   **AgentTail**::run(tx)                              @ src-tauri/src/backfill.rs:70   -- tails new JSONL lines
++   **ShellSocket**::run(tx)                            @ src-tauri/src/collectors/shell.rs:14   -- unix socket for the zsh hook
++   **writer**(rx)                                      @ src-tauri/src/store.rs:60   -- redact, then insert
+</script>
+    </doc-calls>
+    <doc-ask id="stack">
+      <p>Which desktop stack do we build on?</p>
+      <label><input type="radio" name="stack" value="tauri" checked> Tauri: Rust daemon, React UI <small>small binary, good OS access</small></label>
+      <label><input type="radio" name="stack" value="electron"> Electron and Node <small>one language, larger and slower</small></label>
+      <label><input type="radio" name="stack" value="swift"> Native Swift <small>best macOS access, no Windows path</small></label>
+    </doc-ask>
+  </doc-claim>
+
+  <doc-claim>
+    <p>The zsh hook sends the command name, the exit code and the folder.</p>
+    <doc-code title="shell/dev-arch.zsh · sketch" lang="bash">
+<script type="text/plain">
+# Sourced from ~/.zshrc. Sends one line per command to the daemon.
+__da_preexec() { __da_cmd=${${(z)1}[1]}; __da_t0=$EPOCHREALTIME }
+__da_precmd() {
+  local code=$?
+  [[ -z $__da_cmd ]] && return
+  print -r -- "{\"cmd\":\"$__da_cmd\",\"exit\":$code,\"cwd\":\"$PWD\",\"t0\":$__da_t0,\"t1\":$EPOCHREALTIME}" \
+    | nc -U "$HOME/.dev-arch/shell.sock" 2>/dev/null &!
+  unset __da_cmd
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook preexec __da_preexec
+add-zsh-hook precmd  __da_precmd
+</script>
+      <doc-pin line="2" title="First word only">“pnpm”, not “pnpm test --token=…”.</doc-pin>
+    </doc-code>
+    <doc-ask id="term">
+      <p>How much of each command does the hook keep?</p>
+      <label><input type="radio" name="term" value="name" checked> The command name only <small>“pnpm”, “git”, “cargo”</small></label>
+      <label><input type="radio" name="term" value="sub"> Name and subcommand <small>“pnpm test”; better test detection</small></label>
+      <label><input type="radio" name="term" value="full"> Full command, redacted <small>more risk; redaction can miss</small></label>
+    </doc-ask>
+  </doc-claim>
+
+  <doc-claim>
+    <p>The writer removes secrets and noise before it stores an event.</p>
+    <doc-code title="redact.rs · sketch" lang="rust">
+<script type="text/plain">
+const NOISE_DIRS: &[&str] = &["node_modules", "target", "dist", ".next", ".git/objects", "__pycache__"];
+const SECRET_FILES: &[&str] = &[".env", ".env.*", "*.pem", "*.key", "auth.json", "credentials*"];
+const SECRET_TEXT: &[&str] = &[
+    r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+",
+    r"sk-[A-Za-z0-9_-]{20,}", r"gh[pousr]_[A-Za-z0-9]{30,}", r"AKIA[0-9A-Z]{16}",
+];
+
+pub fn redact(mut e: WorkEvent, cfg: &Privacy) -> Option<WorkEvent> {
+    if e.path.as_deref().is_some_and(|p| is_noise(p) || cfg.is_excluded(p)) { return None; }
+    if e.path.as_deref().is_some_and(is_secret_file) { e.path = Some("[secret file]".into()); }
+    e.detail = e.detail.map(|d| scrub(&d, SECRET_TEXT));
+    Some(e)
+}
+</script>
+    </doc-code>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ 3 · timeline ═════ -->
+<doc-claim>
+  <p>The user sees each day as sessions, and each session shows its evidence.</p>
+  <doc-mock frame="none" w="460"><template>
+<div class="ui">
+  <div class="hd">Thursday, 8 October <small>5 h 40 min active</small></div>
+  <div class="sess"><span class="t">09:12–11:05</span><div><b>insight-ui · Redis cache for market data</b><span class="p">Claude Code session, 14 test runs, 3 commits on <code>redis-cache</code></span>
+    <div class="chips" data-ref="ev"><span class="chip">Claude Code ×1</span><span class="chip">pnpm test ×14</span><span class="chip">git commit ×3</span><span class="chip">VS Code</span><span class="conf">high</span></div></div></div>
+  <div class="sess"><span class="t">11:05–11:30</span><div><b>Browser and Slack</b><span class="p">No project evidence.</span><div class="chips"><span class="conf lo">low</span></div></div></div>
+  <div class="sess"><span class="t">14:00–16:20</span><div><b>figurinhabox · checkout flow</b><span class="p">Codex session, file changes in 9 files, no commit</span><div class="chips"><span class="chip">Codex ×2</span><span class="chip">files ×31</span><span class="conf">high</span></div></div></div>
+</div></template>
+    <doc-pin ref="ev" anchor="br" title="Tap a chip">It lists the raw events behind it.</doc-pin>
+  </doc-mock>
+
+  <doc-claim>
+    <p>Fixed rules group events into sessions before any AI call.</p>
+    <doc-code title="sessions/cluster.rs · sketch" lang="rust" hl="7,10">
+<script type="text/plain">
+pub fn cluster_sessions(events: &[WorkEvent]) -> Vec<Session> {
+    let mut out: Vec<Session> = Vec::new();
+    for e in events.iter().sorted_by_key(|e| e.ts) {
+        let project = project_key(e);            // git root of cwd or path, else app name
+        match out.last_mut() {
+            Some(s) if e.ts - s.end <= IDLE_GAP          // 15 min
+                    && (s.project == project || e.is_neutral()) => s.push(e),
+            Some(s) if s.project != project && sustained(events, e, SWITCH_MIN) => {
+                out.push(Session::start(e, project)); // 5 min on the new project
+            }
+            Some(s) if e.ts - s.end <= IDLE_GAP => s.push(e),
+            _ => out.push(Session::start(e, project)),
+        }
+    }
+    out
+}
+</script>
+      <doc-pin line="4" title="Same project key for every source"></doc-pin>
+      <doc-pin line="8" tone="info" title="A short switch does not split">A 30 s look at Slack stays inside the session.</doc-pin>
+    </doc-code>
+  </doc-claim>
+
+  <doc-claim>
+    <p>Active time counts each minute once, even with an agent and the user active.</p>
+    <doc-code title="sessions/attribute.rs · sketch" lang="rust">
+<script type="text/plain">
+/// Active time = union of (foreground, not idle) and (agent task running) intervals.
+/// Overlap counts once. Agent time with the user idle is shown apart, as "agent only".
+pub fn attribute(s: &Session) -> Duration_ {
+    let user  = intervals(s, Kind::ForegroundActive).minus(&intervals(s, Kind::Idle));
+    let agent = intervals(s, Kind::AgentTaskRunning);
+    Duration_ {
+        active:     user.union(&agent).total().round_to(5.minutes()),
+        agent_only: agent.minus(&user).total().round_to(5.minutes()),
+    }
+}
+</script>
+      <doc-pin line="7" title="Rounded to 5 minutes">No false precision.</doc-pin>
+    </doc-code>
+  </doc-claim>
+
+  <doc-claim>
+    <p>The project timeline joins sessions across days by Git root.</p>
+    <doc-mock frame="none" w="460"><template>
+<div class="ui">
+  <div class="hd">Projects <small>September – October</small></div>
+  <div class="bars">
+    <span>insight-ui</span><div class="lane"><i style="left:4%;width:30%"></i><i style="left:62%;width:36%"></i></div>
+    <span>figurinhabox</span><div class="lane"><i style="left:28%;width:22%"></i><i style="left:80%;width:8%"></i></div>
+    <span>ai-video-making</span><div class="lane"><i style="left:40%;width:12%"></i></div>
+    <span>insight-bot</span><div class="lane"><i style="left:0%;width:6%;background:#cfc9bc"></i></div>
+  </div>
+</div></template></doc-mock>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ 4 · journal + achievements ═════ -->
+<doc-claim>
+  <p>Each evening the app writes a journal entry and gives achievements.</p>
+  <doc-mock frame="none" w="440"><template>
+<div class="ui">
+  <div class="hd">Journal · 8 October <small>draft</small></div>
+  <div class="j">
+    <p>You spent the morning on the Redis cache in <b>insight-ui</b>. Tests failed 11 times before the TTL fix<sup>[3]</sup>, then passed 3 times in a row<sup>[4]</sup>.</p>
+    <p>In the afternoon you started the checkout flow in <b>figurinhabox</b> with Codex. Nothing is committed yet<sup>[7]</sup>.</p>
+  </div>
+  <div class="badge" data-ref="badge"><span class="ic">🦴</span><div><b>Fixed three bugs caused by one typo</b><small>1 changed character in cache.ts · 3 failing tests now pass</small></div></div>
+  <div class="ft"><span class="btn pri">Confirm</span><span class="btn">Edit</span><span class="dim">[3] 3 events</span></div>
+</div></template>
+    <doc-pin ref="badge" anchor="tr" title="Each badge has a rule">See 4.2.</doc-pin>
+  </doc-mock>
+
+  <doc-claim>
+    <p>The AI gets a short digest of sessions, never raw logs.</p>
+    <doc-schema id="digest" lang="ts" title="infer/digest.rs → SessionDigest (JSON sent to the model)">
+<script type="text/plain">
+type SessionDigest = {
+  date: string;                 // "2026-10-08"
+  sessions: {
+    id: string;
+    span: [string, string];     // "09:12", "11:05"
+    activeMin: number;          // already rounded to 5
+    project: string;            // "insight-ui"
+    branch?: string;
+    agentPrompts: string[];     // first 200 chars each, redacted
+    commits: { id: string; msg: string; files: number; plus: number; minus: number }[];
+    tests: { cmd: string; pass: number; fail: number };
+    evidenceIds: string[];      // the AI must cite these
+  }[];
+};
+</script>
+    </doc-schema>
+    <doc-ask id="llm">
+      <p>Where does the journal model run?</p>
+      <label><input type="radio" name="llm" value="cloud" checked> Claude API, digest only <small>best text; per-project opt-out</small></label>
+      <label><input type="radio" name="llm" value="local"> Local model with Ollama <small>nothing leaves the Mac; weaker text</small></label>
+      <label><input type="radio" name="llm" value="choice"> The user picks at onboarding <small>two code paths to test</small></label>
+    </doc-ask>
+    <div data-if="llm=cloud"><doc-note tone="warn"><strong>Cost</strong> One call for each day, with Haiku 5.5 for the digest. Re-runs occur only after a correction.</doc-note></div>
+  </doc-claim>
+
+  <doc-claim>
+    <p>Fixed rules detect each achievement. The AI only writes its name.</p>
+    <doc-code title="achievements/mod.rs · sketch" lang="rust">
+<script type="text/plain">
+pub fn one_typo_many_bugs(day: &Day) -> Option<Award> {
+    day.commits().find_map(|c| {
+        let failing_before = day.tests_before(c.ts).failing_names();
+        let passing_after  = day.tests_after(c.ts).passing_names();
+        let fixed = failing_before.intersection(&passing_after).count();
+        (c.changed_chars() <= 3 && fixed >= 3).then(|| Award::new(
+            "one_typo_many_bugs", c.evidence_id(),
+            format!("{} changed character(s) · {fixed} failing tests now pass", c.changed_chars()),
+        ))
+    })
+}
+// Also: night_owl (commit after 23:00), comeback (repo idle 30 days),
+// agent_whisperer (one prompt, green tests), yak_shave (5 repos in 1 session)
+</script>
+      <doc-pin line="6" title="No rule match, no badge"></doc-pin>
+    </doc-code>
+    <doc-ask id="badges">
+      <p>Who sees the achievements?</p>
+      <label><input type="radio" name="badges" value="private" checked> Only the user, on this Mac</label>
+      <label><input type="radio" name="badges" value="share"> The user can share one as an image <small>adds a share card</small></label>
+      <label><input type="radio" name="badges" value="off"> No achievements in the first build <small>claim 4.2 goes</small></label>
+    </doc-ask>
+  </doc-claim>
+
+  <doc-claim>
+    <p>The app drops any journal sentence that cites no evidence.</p>
+    <doc-code title="infer/journal.rs · sketch" lang="rust">
+<script type="text/plain">
+pub fn accept(draft: JournalDraft, digest: &SessionDigest) -> Journal {
+    let known: HashSet<&str> = digest.evidence_ids().collect();
+    let lines = draft.lines.into_iter()
+        .filter(|l| !l.cites.is_empty() && l.cites.iter().all(|id| known.contains(id.as_str())))
+        .collect();
+    Journal { lines, state: State::Inferred }
+}
+</script>
+    </doc-code>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ 5 · correction ═════ -->
+<doc-claim>
+  <p>The user can correct a session, and later sessions use that correction.</p>
+  <doc-machine name="sess" caption="Only confirmed sessions feed reports later.">
+<script type="text/plain">
+machine sess initial observed
+state observed          # Events grouped. No label yet.
+state inferred          # The AI gave a label and a summary.
+state edited            # The user changed the label, time or project.
+state confirmed final   # The user accepted it.
+state excluded  final   # Hidden from journal and totals.
+
+| observed | inferred  | confirmed |
+| .        | edited    | excluded  |
+
+observed -label->   inferred  : AI
+inferred -accept->  confirmed : Confirm
+inferred -edit->    edited    : Edit
+edited   -accept->  confirmed : Save
+inferred -exclude-> excluded  : Hide
+edited   -exclude-> excluded  : Hide
+</script>
+    <div data-state="observed"><doc-mock frame="none" w="420"><template><div class="ui"><div class="sess"><span class="t">09:12–11:05</span><div><b class="dim">insight-ui · unlabelled</b><span class="p">42 events</span></div></div></div></template></doc-mock></div>
+    <div data-state="inferred"><doc-mock frame="none" w="420"><template><div class="ui"><div class="sess"><span class="t">09:12–11:05</span><div><b>insight-ui · Redis cache for market data</b><span class="p">AI label</span><div class="chips"><span class="conf">high</span></div></div></div><div class="ft"><span class="btn pri">Confirm</span><span class="btn">Edit</span><span class="btn">Hide</span></div></div></template></doc-mock></div>
+    <div data-state="edited"><doc-mock frame="none" w="420"><template><div class="ui"><div class="sess"><span class="t">09:12–<b>10:40</b></span><div><b>insight-ui · <u>SHOP-512 cache TTL bug</u></b><span class="p">Edited by you</span></div></div><div class="ft"><span class="btn pri">Save</span><span class="dim">Also apply to branch redis-cache</span></div></div></template></doc-mock></div>
+    <div data-state="confirmed"><doc-mock frame="none" w="420"><template><div class="ui"><div class="sess"><span class="t">09:12–10:40</span><div><b>insight-ui · SHOP-512 cache TTL bug</b><span class="p ok">Confirmed</span></div></div></div></template></doc-mock></div>
+    <div data-state="excluded"><doc-mock frame="none" w="420"><template><div class="ui"><div class="sess"><span class="t">11:05–11:30</span><div><b class="dim">Hidden</b><span class="p">Not in journal or totals.</span></div></div></div></template></doc-mock></div>
+  </doc-machine>
+
+  <doc-claim>
+    <p>A relabel with “Also apply” becomes a rule for new sessions.</p>
+    <doc-code title="corrections.rs · sketch" lang="rust">
+<script type="text/plain">
+pub enum Rule {
+    ProjectForPath { prefix: PathBuf, project: String },     // ~/code/insight-ui-* → insight-ui
+    LabelForBranch { repo: String, branch: String, label: String },
+    ExcludeApp     { bundle_id: String },
+}
+
+pub fn apply_rules(s: &mut Session, rules: &[Rule]) {
+    for r in rules { r.apply(s); }   // runs before the AI label; rule wins over AI
+}
+</script>
+      <doc-pin line="2" tone="info" title="Worktrees join their main repo"></doc-pin>
+    </doc-code>
+  </doc-claim>
+</doc-claim>
+
+<!-- ═════ shared · not changing ═════ -->
+<doc-claim aux="shared">
+  <p>Shared: one local SQLite file with events, sessions and rules.</p>
+  <doc-schema id="db" lang="sql" title="src-tauri/migrations/0001_init.sql" caption="Events are observed. Sessions carry the inferred or confirmed state.">
+<script type="text/plain">
+CREATE TABLE work_events (
+  id         TEXT PRIMARY KEY,          -- ulid
+  source     TEXT NOT NULL,             -- git | claude_code | codex | fs | app | shell
+  source_id  TEXT NOT NULL,             -- id in the source, for dedupe
+  ts         INTEGER NOT NULL,          -- unix ms
+  kind       TEXT NOT NULL,             -- commit_created, test_failed, prompt, app_active …
+  project    TEXT,                      -- git root, resolved at insert
+  path       TEXT,
+  detail     TEXT,                      -- redacted, ≤ 200 chars
+  UNIQUE (source, source_id)
+);
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY, day TEXT NOT NULL, start_ts INTEGER, end_ts INTEGER,
+  project TEXT, label TEXT, summary TEXT, active_min INTEGER, agent_only_min INTEGER,
+  state TEXT NOT NULL CHECK (state IN ('observed','inferred','edited','confirmed','excluded')),
+  confidence TEXT CHECK (confidence IN ('low','medium','high'))
+);
+CREATE TABLE session_events (session_id TEXT, event_id TEXT, PRIMARY KEY (session_id, event_id));
+CREATE TABLE achievements (id TEXT PRIMARY KEY, day TEXT, rule TEXT, title TEXT, evidence_id TEXT);
+CREATE TABLE rules (id TEXT PRIMARY KEY, kind TEXT NOT NULL, body TEXT NOT NULL);
+</script>
+  </doc-schema>
+</doc-claim>
+
+<doc-claim aux="scope">
+  <p>Not in this plan: integrations, reports, career and social features.</p>
+  <ul>
+    <li>macOS only. Windows and Linux collectors come later.</li>
+    <li>No Cursor adapter and no browser extension.</li>
+    <li>No GitHub, Jira, Slack, Calendar or Toggl. The sessions table is the input for a later Toggl export.</li>
+    <li>No weekly reports, résumés, performance reviews or public profiles.</li>
+    <li>No accounts and no server. The app works offline except the optional journal call.</li>
+  </ul>
+</doc-claim>
+
+</doc-plan>
+</main>
+</body>
+</html>
