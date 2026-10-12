@@ -1,5 +1,15 @@
 import { useEffect, useState } from "react";
-import { api, type CalendarStatus, type Context, type ContextRules, type ModelInfo, type ProjectContext, type Settings, type Status } from "./api";
+import {
+  api,
+  type CalendarStatus,
+  type Context,
+  type ContextRules,
+  type ModelInfo,
+  type ProjectContext,
+  type Settings,
+  type Status,
+  type TrackerStatus,
+} from "./api";
 import ScheduleStep from "./ScheduleStep";
 
 type Toggle = { key: keyof Settings["sources"]; label: string; note: string; disabled?: boolean };
@@ -162,6 +172,8 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
         </label>
         {togglError && <p className="error">{togglError}</p>}
       </section>
+
+      <TicketSources onSaved={onSaved} />
 
       <footer className="save">
         <button className="primary" onClick={save}>Save settings</button>
@@ -350,6 +362,95 @@ function Calendar({ onSaved }: { onSaved: () => void }) {
           </div>
         </>
       )}
+    </section>
+  );
+}
+
+/** Jira (API token) and GitHub (the gh CLI's accounts), which "Find tickets" in Reports asks.
+ * Both only read. Tokens stay in the Keychain or in gh. */
+function TicketSources({ onSaved }: { onSaved: () => void }) {
+  const [status, setStatus] = useState<TrackerStatus | null>(null);
+  const [site, setSite] = useState("");
+  const [email, setEmail] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.trackerStatus().then((t) => {
+      setStatus(t);
+      setSite(t.jira_site || t.jira_site_guess || "");
+      setEmail(t.jira_email || t.jira_email_guess || "");
+    });
+  }, []);
+
+  const connect = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const account = await api.connectJira(site, email, token);
+      setToken("");
+      setNote(`Connected to Jira as ${account.display_name || account.email}. The token is in your Keychain.`);
+      setStatus(await api.trackerStatus());
+      onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const setGithub = async (github: boolean) => {
+    if (!status) return;
+    await api.patchSettings({ trackers: { jira_site: status.jira_site, jira_email: status.jira_email, github } });
+    setStatus({ ...status, github_enabled: github });
+    onSaved();
+  };
+
+  return (
+    <section>
+      <h2>Ticket sources</h2>
+      <p className="muted">
+        Find tickets in Reports asks these for your own tickets in the report range and suggests one for each entry
+        without a ticket. Nothing is written to Jira or GitHub, and no ticket is set until you accept it.
+      </p>
+
+      <h3>Jira {status?.jira_connected && <span className="tag ok">Connected</span>}</h3>
+      <p className="muted">
+        Jira uses an API token. Get a token opens the Atlassian page in your browser: create a token, copy it, and paste it here.
+      </p>
+      <label className="area">
+        Jira site
+        <input value={site} placeholder="your-company.atlassian.net" onChange={(e) => setSite(e.target.value)} />
+      </label>
+      <label className="area">
+        Atlassian email
+        <input value={email} placeholder="you@company.com" onChange={(e) => setEmail(e.target.value)} />
+      </label>
+      <label className="area">
+        API token
+        <span className="inline">
+          <input type="password" autoComplete="off" value={token} placeholder={status?.jira_connected ? "Replace the saved token" : "Paste your API token"} onChange={(e) => setToken(e.target.value)} />
+          <button onClick={() => api.openJiraTokenPage()}>Get a token</button>
+          <button className="primary" disabled={busy || !token.trim() || !site.trim() || !email.trim()} onClick={connect}>
+            {busy ? "Connecting…" : "Connect"}
+          </button>
+        </span>
+      </label>
+      {error && <p className="error">{error}</p>}
+
+      <h3>GitHub</h3>
+      {status && status.github_accounts.length === 0 ? (
+        <p className="muted">
+          GitHub goes through the GitHub CLI. Install it, run <code>gh auth login</code> in a terminal, then open this screen again.
+        </p>
+      ) : (
+        <label className="check-line">
+          <input type="checkbox" checked={status?.github_enabled ?? true} onChange={(e) => setGithub(e.target.checked)} />
+          Use the GitHub CLI accounts {status?.github_accounts.join(" and ")}
+        </label>
+      )}
+      {note && <p className="muted">{note}</p>}
     </section>
   );
 }

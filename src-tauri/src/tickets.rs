@@ -93,6 +93,11 @@ impl Tally {
     }
 }
 
+/// The first Jira key in `text` whose prefix is in `prefixes`.
+pub fn known_jira_key(text: &str, prefixes: &BTreeSet<String>) -> Option<String> {
+    jira_re().captures_iter(text).map(|c| c[0].to_string()).find(|k| k.split('-').next().is_some_and(|p| prefixes.contains(p)))
+}
+
 /// Picks the ticket with the most weighted evidence in a session.
 /// @param project the session's project, used to name GitHub issues (`project#128`).
 /// @param prefixes from `known_prefixes`, over a wide window of history.

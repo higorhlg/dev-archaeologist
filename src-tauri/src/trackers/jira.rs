@@ -1,0 +1,151 @@
+//! Jira Cloud REST API v3 with an API token: the account check and a search for the
+//! user's own tickets in a date range. Read only.
+
+use anyhow::{anyhow, Result};
+use chrono::DateTime;
+use serde::Serialize;
+use serde_json::{json, Value};
+
+use super::{Candidate, DayRange};
+use crate::http::{self, KeychainItem};
+
+const TOKEN: KeychainItem = KeychainItem("jira-api-token");
+/// Where Atlassian users create API tokens. "Sign in" opens this page in the browser.
+pub const TOKEN_PAGE: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
+const MAX_PAGES: usize = 3;
+const PAGE_SIZE: usize = 100;
+
+pub fn has_token() -> bool {
+    TOKEN.get().is_some()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JiraAccount {
+    pub display_name: String,
+    pub email: String,
+}
+
+/// Accepts `acme`, `acme.atlassian.net` or a full URL and returns the bare host.
+pub fn normalize_site(site: &str) -> String {
+    let host = site.trim().trim_start_matches("https://").trim_start_matches("http://");
+    let host = host.split('/').next().unwrap_or("").to_lowercase();
+    if host.is_empty() || host.contains('.') { host } else { format!("{host}.atlassian.net") }
+}
+
+fn get(site: &str, email: &str, token: &str, path: &str) -> Result<Value> {
+    let resp = http::agent(30)
+        .get(format!("https://{site}{path}"))
+        .header("Authorization", http::basic_auth(email, token))
+        .header("Accept", "application/json")
+        .call()?;
+    http::read_json(resp, "Jira")
+}
+
+fn post(site: &str, email: &str, token: &str, path: &str, body: &Value) -> Result<Value> {
+    let resp = http::agent(30)
+        .post(format!("https://{site}{path}"))
+        .header("Authorization", http::basic_auth(email, token))
+        .header("Accept", "application/json")
+        .send_json(body)?;
+    http::read_json(resp, "Jira")
+}
+
+/// Checks the token against the site, then saves it to the Keychain.
+pub fn connect(site: &str, email: &str, token: &str) -> Result<JiraAccount> {
+    let me = get(site, email.trim(), token.trim(), "/rest/api/3/myself")?;
+    TOKEN.set(token)?;
+    Ok(JiraAccount {
+        display_name: me["displayName"].as_str().unwrap_or_default().to_string(),
+        email: me["emailAddress"].as_str().unwrap_or(email).to_string(),
+    })
+}
+
+/// Tickets assigned to the user at any time in the range, and tickets the user reported
+/// or logged work on that changed in the range.
+fn jql(range: &DayRange) -> String {
+    let (from, to) = (range.from.format("%Y-%m-%d"), range.to.succ_opt().unwrap_or(range.to).format("%Y-%m-%d"));
+    format!(
+        "assignee WAS currentUser() DURING (\"{from}\", \"{to}\") \
+         OR ((reporter = currentUser() OR worklogAuthor = currentUser()) AND updated >= \"{from}\") \
+         ORDER BY updated DESC"
+    )
+}
+
+fn parse_time(v: &Value) -> Option<i64> {
+    DateTime::parse_from_str(v.as_str()?, "%Y-%m-%dT%H:%M:%S%.f%z").ok().map(|t| t.timestamp_millis())
+}
+
+fn to_candidate(site: &str, issue: &Value, range_end_ms: i64) -> Option<Candidate> {
+    let key = issue["key"].as_str()?.to_string();
+    let f = &issue["fields"];
+    Some(Candidate {
+        url: format!("https://{site}/browse/{key}"),
+        title: f["summary"].as_str().unwrap_or_default().to_string(),
+        tracker: "jira".into(),
+        repo: None,
+        created_ms: parse_time(&f["created"]).unwrap_or(0),
+        last_ms: parse_time(&f["updated"]).unwrap_or(range_end_ms).max(range_end_ms),
+        key,
+    })
+}
+
+/// The user's tickets for the range, newest first, up to three pages.
+pub fn search(site: &str, email: &str, range: &DayRange) -> Result<Vec<Candidate>> {
+    let token = TOKEN.get().ok_or_else(|| anyhow!("Connect Jira in Sources first"))?;
+    let mut out = Vec::new();
+    let mut next: Option<String> = None;
+    for _ in 0..MAX_PAGES {
+        let mut body = json!({"jql": jql(range), "fields": ["summary", "created", "updated"], "maxResults": PAGE_SIZE});
+        if let Some(t) = &next {
+            body["nextPageToken"] = json!(t);
+        }
+        let page = post(site, email, &token, "/rest/api/3/search/jql", &body)?;
+        let issues = page["issues"].as_array().cloned().unwrap_or_default();
+        out.extend(issues.iter().filter_map(|i| to_candidate(site, i, range.end_ms())));
+        next = page["nextPageToken"].as_str().map(String::from);
+        if next.is_none() || page["isLast"].as_bool() == Some(true) {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// A likely Jira site for a work email: `me@acme.com` → `acme.atlassian.net`.
+pub fn guess_site(work_email: &str) -> Option<String> {
+    let domain = work_email.rsplit_once('@')?.1;
+    let stem = domain.split('.').next().filter(|s| !s.is_empty())?;
+    Some(format!("{stem}.atlassian.net"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn day(d: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn site_forms_become_a_host() {
+        assert_eq!(normalize_site("acme"), "acme.atlassian.net");
+        assert_eq!(normalize_site("https://Acme.atlassian.net/jira/your-work"), "acme.atlassian.net");
+        assert_eq!(normalize_site("jira.acme.com"), "jira.acme.com");
+        assert_eq!(guess_site("me@acme.com").as_deref(), Some("acme.atlassian.net"));
+    }
+
+    #[test]
+    fn jql_covers_the_whole_last_day() {
+        let q = jql(&DayRange { from: day("2026-10-05"), to: day("2026-10-09") });
+        assert!(q.contains("DURING (\"2026-10-05\", \"2026-10-10\")"), "{q}");
+    }
+
+    #[test]
+    fn issue_json_becomes_a_candidate() {
+        let issue = json!({"key": "SHOP-12", "fields": {"summary": "Fix VAT", "created": "2026-10-01T09:00:00.000+0000", "updated": "2026-10-06T10:00:00.000+0100"}});
+        let c = to_candidate("acme.atlassian.net", &issue, 0).unwrap();
+        assert_eq!(c.url, "https://acme.atlassian.net/browse/SHOP-12");
+        assert_eq!(c.title, "Fix VAT");
+        assert!(c.created_ms > 0 && c.last_ms > c.created_ms);
+    }
+}

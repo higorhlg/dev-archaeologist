@@ -33,6 +33,26 @@ pub struct Settings {
     pub contexts: ContextRules,
     /// Calendar names whose events never become meetings, such as "Birthdays".
     pub calendar_excluded: Vec<String>,
+    /// Where "Find tickets" looks for the user's tickets.
+    pub trackers: TrackerSettings,
+}
+
+/// Issue trackers that "Find tickets" asks. Secrets stay in the Keychain, not here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackerSettings {
+    /// Jira Cloud site host, such as `acme.atlassian.net`. Empty when Jira is not set up.
+    pub jira_site: String,
+    /// The Atlassian account email that owns the API token.
+    pub jira_email: String,
+    /// Ask GitHub through the accounts the `gh` CLI is signed in with.
+    pub github: bool,
+}
+
+impl Default for TrackerSettings {
+    fn default() -> Self {
+        Self { jira_site: String::new(), jira_email: String::new(), github: true }
+    }
 }
 
 /// The user's regular hours. One range for every work day, with breaks.
@@ -137,6 +157,7 @@ impl Default for Settings {
             schedule_asked: false,
             contexts: ContextRules::default(),
             calendar_excluded: Vec::new(),
+            trackers: TrackerSettings::default(),
         }
     }
 }

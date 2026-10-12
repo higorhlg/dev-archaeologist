@@ -12,8 +12,9 @@ use crate::event::{clip, WorkEvent};
 use crate::pipeline::day_bounds;
 use crate::sessions::{attribute::attribute, gaps::Gap, Session};
 use crate::settings::{Settings, TogglProject};
-use crate::store::Store;
+use crate::store::{Store, StoredSuggestion};
 use crate::tickets::{self, Ticket};
+use crate::trackers::TicketInfo;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,6 +80,10 @@ pub struct ReportEntry {
     pub description: String,
     pub tags: Vec<String>,
     pub ticket: Option<Ticket>,
+    /// Title and link of the ticket, when a tracker returned it.
+    pub ticket_info: Option<TicketInfo>,
+    /// A ticket "Find tickets" proposed. Only on entries without a ticket.
+    pub suggestion: Option<Suggestion>,
     pub session_ids: Vec<String>,
     /// Every session in the entry is confirmed.
     pub approved: bool,
@@ -91,6 +96,31 @@ pub struct ReportEntry {
     pub gap_min: i64,
     /// Bridged minutes not in `duration_min` until the entry is approved.
     pub pending_bridge_min: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Suggestion {
+    pub info: TicketInfo,
+    /// Why the ticket fits, such as "same repo, shares invoice, header".
+    pub reason: String,
+    pub by_ai: bool,
+}
+
+/// Ticket titles and open suggestions, read once per report.
+struct TicketLookups {
+    info: std::collections::HashMap<String, TicketInfo>,
+    suggestions: std::collections::HashMap<String, StoredSuggestion>,
+}
+
+impl TicketLookups {
+    fn info_for(&self, key: &str) -> TicketInfo {
+        self.info.get(key).cloned().unwrap_or_else(|| TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: String::new() })
+    }
+
+    fn suggestion_for(&self, session_ids: &[String]) -> Option<Suggestion> {
+        let s = session_ids.iter().find_map(|id| self.suggestions.get(id))?;
+        Some(Suggestion { info: self.info_for(&s.ticket), reason: s.reason.clone(), by_ai: s.by_ai })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -248,7 +278,15 @@ fn review_reasons(group: &[&Loaded]) -> Vec<String> {
     r
 }
 
-fn build_entry(key: String, group: Vec<&Loaded>, q: &ReportQuery, settings: &Settings, sent: &BTreeSet<String>) -> ReportEntry {
+struct EntryContext<'a> {
+    q: &'a ReportQuery,
+    settings: &'a Settings,
+    sent: &'a BTreeSet<String>,
+    lookups: &'a TicketLookups,
+}
+
+fn build_entry(key: String, group: Vec<&Loaded>, cx: &EntryContext) -> ReportEntry {
+    let EntryContext { q, settings, sent, lookups } = *cx;
     let first = group.iter().min_by_key(|l| l.session.start_ts).unwrap();
     let project = first.session.project.clone();
     let map = mapping(settings, project.as_deref());
@@ -260,7 +298,10 @@ fn build_entry(key: String, group: Vec<&Loaded>, q: &ReportQuery, settings: &Set
         _ => (label.clone(), vec![]),
     };
     let reasons = review_reasons(&group);
+    let session_ids: Vec<String> = group.iter().map(|l| l.session.id.clone()).collect();
     ReportEntry {
+        ticket_info: ticket.as_ref().and_then(|t| lookups.info.get(&t.key).cloned()),
+        suggestion: if ticket.is_none() { lookups.suggestion_for(&session_ids) } else { None },
         day: first.session.day.clone(),
         start_ts: first.session.start_ts,
         duration_min: group.iter().map(|l| l.report_min + l.gap_min).sum(),
@@ -272,7 +313,7 @@ fn build_entry(key: String, group: Vec<&Loaded>, q: &ReportQuery, settings: &Set
         billable: map.billable,
         skip: map.skip,
         approved: group.iter().all(|l| l.session.state == "confirmed"),
-        session_ids: group.iter().map(|l| l.session.id.clone()).collect(),
+        session_ids,
         sent: sent.contains(&key),
         key,
         context: first.context,
@@ -289,12 +330,14 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
     let settings = Settings::load(store)?;
     let (loaded, prefixes) = load(store, q)?;
     let sent = store.toggl_sent_keys()?;
+    let lookups = TicketLookups { info: store.ticket_info()?, suggestions: store.ticket_suggestions()? };
+    let cx = EntryContext { q, settings: &settings, sent: &sent, lookups: &lookups };
     let mut groups: BTreeMap<String, Vec<&Loaded>> = BTreeMap::new();
     for l in &loaded {
         groups.entry(group_key(l, q.grouping)).or_default().push(l);
     }
     let mut entries: Vec<ReportEntry> =
-        groups.into_iter().map(|(k, g)| build_entry(k, g, q, &settings, &sent)).filter(|e| e.duration_min > 0).collect();
+        groups.into_iter().map(|(k, g)| build_entry(k, g, &cx)).filter(|e| e.duration_min > 0).collect();
     entries.sort_by_key(|e| e.start_ts);
 
     let mut by_project: BTreeMap<String, i64> = BTreeMap::new();

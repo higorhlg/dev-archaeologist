@@ -173,6 +173,7 @@ button.link { border: 0; background: none; padding: 4px 0; color: var(--focus); 
 .sources { max-width: 720px; }
 .sources section { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 20px; margin-bottom: 16px; display: grid; gap: 12px; }
 .sources h2 { font-size: 15px; font-weight: 700; }
+.sources h3 { font-size: 13.5px; font-weight: 650; margin: 14px 0 2px; display: flex; gap: 8px; align-items: center; }
 .toggles { list-style: none; padding: 0; margin: 0; }
 .toggles li + li { border-top: 1px solid var(--rule-soft); }
 .toggles label { display: flex; gap: 12px; align-items: flex-start; padding: 9px 0; cursor: pointer; }
@@ -243,6 +244,10 @@ input[role="switch"]:checked::after { left: 16px; }
 .report-entry .body { display: grid; gap: 3px; min-width: 0; }
 .line1 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ticket { padding: 1px 8px; font-size: 12px; border-radius: 10px; background: var(--amber-wash); border-color: color-mix(in srgb, var(--amber) 45%, transparent); font-variant-numeric: tabular-nums; }
+.ticket.suggested { background: none; border-style: dashed; border-color: var(--amber); color: var(--ink); }
+.suggestion { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.suggestion .sugg-title { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 34ch; }
+button.small { padding: 1px 8px; font-size: 12px; }
 .ticket.add { background: none; border-style: dashed; color: var(--muted); font-weight: 500; }
 .ticket-edit { display: inline-flex; gap: 4px; }
 .ticket-edit input { width: 130px; border: 1px solid var(--rule); border-radius: 6px; padding: 2px 6px; background: var(--paper); font-size: 12.5px; }

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::corrections::Rule;
 use crate::event::WorkEvent;
 use crate::sessions::{gaps::Gap, Session};
+use crate::trackers::TicketInfo;
 
 const SCHEMA: &str = include_str!("../migrations/0001_init.sql");
 
@@ -40,6 +41,14 @@ pub struct Journal {
     pub lines: Vec<JournalLine>,
     pub state: String,
     pub model: Option<String>,
+}
+
+/// A ticket "Find tickets" proposed for a session, waiting for the user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredSuggestion {
+    pub ticket: String,
+    pub reason: String,
+    pub by_ai: bool,
 }
 
 pub fn default_db_path() -> PathBuf {
@@ -327,6 +336,69 @@ impl Store {
             Some(t) => conn.execute("INSERT OR REPLACE INTO ticket_overrides VALUES (?1, ?2)", params![session_id, t.trim()])?,
             None => conn.execute("DELETE FROM ticket_overrides WHERE session_id = ?1", [session_id])?,
         };
+        Ok(())
+    }
+
+    /// Titles and links of tickets the trackers returned, keyed by ticket.
+    pub fn ticket_info(&self) -> Result<std::collections::HashMap<String, TicketInfo>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT ticket, title, url, tracker FROM ticket_info")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, TicketInfo { key: r.get(0)?, title: r.get(1)?, url: r.get(2)?, tracker: r.get(3)? }))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn save_ticket_info(&self, tickets: &[TicketInfo]) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let now = Utc::now().timestamp_millis();
+        for t in tickets {
+            tx.execute("INSERT OR REPLACE INTO ticket_info VALUES (?1, ?2, ?3, ?4, ?5)", params![t.key, t.title, t.url, t.tracker, now])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Open suggestions keyed by session id. Dismissed ones are left out.
+    pub fn ticket_suggestions(&self) -> Result<std::collections::HashMap<String, StoredSuggestion>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT session_id, ticket, reason, by_ai FROM ticket_suggestions WHERE dismissed = 0")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, StoredSuggestion { ticket: r.get(1)?, reason: r.get(2)?, by_ai: r.get::<_, i64>(3)? == 1 }))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Suggests a ticket for sessions. A session where the user dismissed this same ticket keeps
+    /// the dismissal. @returns how many sessions got the suggestion.
+    pub fn suggest_ticket(&self, session_ids: &[String], s: &StoredSuggestion) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let mut n = 0;
+        for id in session_ids {
+            n += conn.execute(
+                "INSERT INTO ticket_suggestions (session_id, ticket, reason, by_ai) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(session_id) DO UPDATE SET ticket = ?2, reason = ?3, by_ai = ?4, dismissed = 0
+                 WHERE NOT (ticket_suggestions.ticket = ?2 AND ticket_suggestions.dismissed = 1)",
+                params![id, s.ticket, s.reason, s.by_ai as i64],
+            )?;
+        }
+        Ok(n)
+    }
+
+    pub fn dismiss_suggestions(&self, session_ids: &[String]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        for id in session_ids {
+            conn.execute("UPDATE ticket_suggestions SET dismissed = 1 WHERE session_id = ?1", [id])?;
+        }
+        Ok(())
+    }
+
+    pub fn clear_suggestions(&self, session_ids: &[String]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        for id in session_ids {
+            conn.execute("DELETE FROM ticket_suggestions WHERE session_id = ?1", [id])?;
+        }
         Ok(())
     }
 

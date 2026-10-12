@@ -217,6 +217,39 @@ async fn reimport_meetings(p: State<'_, Pipeline>) -> CmdResult<usize> {
     tauri::async_runtime::spawn_blocking(move || api::reimport_meetings(&p)).await.map_err(|e| e.to_string())?.map_err(err)
 }
 
+#[tauri::command]
+fn dismiss_suggestion(p: State<Pipeline>, session_ids: Vec<String>) -> CmdResult<()> {
+    api::dismiss_suggestion(&p, &session_ids).map_err(err)
+}
+
+#[tauri::command]
+async fn tracker_status(p: State<'_, Pipeline>) -> CmdResult<devarch::trackers::TrackerStatus> {
+    let p = p.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || api::tracker_status(&p)).await.map_err(|e| e.to_string())?.map_err(err)
+}
+
+#[tauri::command]
+async fn connect_jira(p: State<'_, Pipeline>, site: String, email: String, token: String) -> CmdResult<devarch::trackers::jira::JiraAccount> {
+    let p = p.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || api::connect_jira(&p, &site, &email, &token)).await.map_err(|e| e.to_string())?.map_err(err)
+}
+
+#[tauri::command]
+fn open_jira_token_page() -> CmdResult<()> {
+    api::open_jira_token_page().map_err(err)
+}
+
+#[tauri::command]
+fn open_ticket(p: State<Pipeline>, key: String) -> CmdResult<()> {
+    api::open_ticket(&p, &key).map_err(err)
+}
+
+#[tauri::command]
+async fn find_tickets(p: State<'_, Pipeline>, query: ReportQuery) -> CmdResult<devarch::trackers::find::FindResult> {
+    let p = p.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || api::find_tickets(&p, &query)).await.map_err(|e| e.to_string())?.map_err(err)
+}
+
 fn main() {
     let store = Store::open(&default_db_path()).expect("open the local database");
     let pipeline = Pipeline::new(store);
@@ -229,7 +262,8 @@ fn main() {
             install_shell_hook, report, approve_sessions, approve_confident, set_entry_label, set_ticket,
             export_toggl_csv, connect_toggl, toggl_projects, send_to_toggl, days_needing_labels, ai_models, report_days, resolve_gap,
             approve_bridges, fill_to_schedule, save_schedule, project_contexts, set_project_context, patch_settings, detect_contexts,
-            calendar_status, connect_calendar, reimport_meetings
+            calendar_status, connect_calendar, reimport_meetings, dismiss_suggestion, tracker_status, connect_jira,
+            open_jira_token_page, open_ticket, find_tickets
         ])
         .run(tauri::generate_context!())
         .expect("run the Dev Archaeologist window");

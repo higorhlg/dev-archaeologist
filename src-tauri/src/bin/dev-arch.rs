@@ -5,6 +5,7 @@
 //!   dev-arch day [YYYY-MM-DD]    print one day's sessions and achievements
 //!   dev-arch journal YYYY-MM-DD  write the day's journal with the Claude API
 //!   dev-arch report FROM TO [session|ticket_day|project_day] [work|personal|all]
+//!   dev-arch find-tickets FROM TO [work|personal|all]  suggest tickets from Jira and GitHub
 //!   dev-arch schedule [HH:MM HH:MM | off]  set Mon–Fri hours with lunch 12–13
 //!   dev-arch gaps [YYYY-MM-DD]   print the day's gaps inside work hours
 //!   dev-arch fill DAY PROJECT     assign a day's unaccounted blocks to one project
@@ -89,6 +90,25 @@ fn main() -> Result<()> {
             for e in &r.entries {
                 let t = e.ticket.as_ref().map(|t| format!("{} ({})", t.key, t.source)).unwrap_or_else(|| "-".into());
                 println!("  {} {:>4}m  {:<22} {:<28} {}", e.day, e.duration_min, e.toggl_project, t, devarch::event::clip(&e.label, 70));
+            }
+        }
+        Some("find-tickets") => {
+            let today = Local::now().format("%Y-%m-%d").to_string();
+            let q = devarch::reports::ReportQuery {
+                from: args.get(2).cloned().unwrap_or_else(|| today.clone()),
+                to: args.get(3).cloned().unwrap_or(today),
+                grouping: devarch::reports::Grouping::TicketDay,
+                tickets: devarch::reports::TicketMode::Prefix,
+                context: serde_json::from_value(serde_json::json!(args.get(4).map(String::as_str).unwrap_or("work")))?,
+            };
+            let r = api::find_tickets(&p, &q)?;
+            println!("checked {} · suggested {} ({} by AI) · {:?}", r.checked, r.suggested, r.by_ai, r.looked_in);
+            for e in &r.errors {
+                println!("  error: {e}");
+            }
+            for e in api::report(&p, &q)?.entries.iter().filter(|e| e.suggestion.is_some()) {
+                let s = e.suggestion.as_ref().unwrap();
+                println!("  {} {:<20} {:<14} {} · {}", e.day, e.toggl_project, s.info.key, devarch::event::clip(&s.info.title, 50), s.reason);
             }
         }
         Some("schedule") => {

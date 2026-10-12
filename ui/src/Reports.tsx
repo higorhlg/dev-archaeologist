@@ -15,9 +15,11 @@ import {
   type ReportPrefs,
   type ReportQuery,
   type Status,
+  type FindResult,
   type TicketMode,
   type TogglProject,
   type TogglProjectInfo,
+  type TrackerStatus,
 } from "./api";
 
 const RANGES: { id: string; label: string }[] = [
@@ -66,6 +68,12 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showMapping, setShowMapping] = useState(false);
+  const [trackers, setTrackers] = useState<TrackerStatus | null>(null);
+  const [finding, setFinding] = useState(false);
+
+  useEffect(() => {
+    api.trackerStatus().then(setTrackers).catch(() => setTrackers(null));
+  }, []);
 
   const [from, to] = rangeDays(prefs.range);
   const query: ReportQuery = useMemo(
@@ -110,6 +118,18 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
       return `Labelled ${unlabelled.length} ${unlabelled.length === 1 ? "day" : "days"} and wrote their journal entries.`;
     }).finally(() => setLabelling(null));
 
+  const findTickets = () => {
+    setFinding(true);
+    run(async () => findSummary(await api.findTickets(query))).finally(() => setFinding(false));
+  };
+
+  const suggested = (report?.entries ?? []).filter((e) => e.suggestion && !e.ticket);
+  const acceptAll = () =>
+    run(async () => {
+      for (const e of suggested) await api.setTicket(e.session_ids, e.suggestion!.info.key);
+      return `Set ${suggested.length} suggested ${suggested.length === 1 ? "ticket" : "tickets"}.`;
+    });
+
   const byDay = useMemo(() => {
     const m = new Map<string, ReportEntry[]>();
     for (const e of report?.entries ?? []) m.set(e.day, [...(m.get(e.day) ?? []), e]);
@@ -150,6 +170,12 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
             Approve bridges ({minutes(schedule.reduce((n, d) => n + d.pending_bridge_min, 0))})
           </button>
         )}
+        {trackers && (trackers.jira_connected || (trackers.github_enabled && trackers.github_accounts.length > 0)) ? (
+          <button disabled={finding} onClick={findTickets}>{finding ? "Looking for tickets…" : "Find tickets"}</button>
+        ) : (
+          <button onClick={goToSources}>Connect Jira or GitHub to find tickets</button>
+        )}
+        {suggested.length > 1 && <button onClick={acceptAll}>Use {suggested.length} suggested tickets</button>}
         <button className="link" onClick={() => setShowMapping(!showMapping)}>
           {showMapping ? "Hide Toggl projects" : "Toggl projects"}
         </button>
@@ -181,6 +207,15 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
       ))}
     </div>
   );
+}
+
+/** One line on what "Find tickets" did, with where it looked and what failed. */
+function findSummary(r: FindResult): string {
+  const where = r.looked_in.length ? ` Looked in ${r.looked_in.join("; ")}.` : "";
+  const failed = r.errors.length ? ` ${r.errors.join(" ")}` : "";
+  if (r.checked === 0) return "Every entry already has a ticket.";
+  const ai = r.by_ai ? `, ${r.by_ai} picked by AI between close matches` : "";
+  return `Suggested tickets for ${r.suggested} of ${r.checked} entries without one${ai}.${where}${failed}`;
 }
 
 function Seg<T extends string>({ label, options, value, onChange }: { label: string; options: { id: T; label: string }[]; value: T; onChange: (v: T) => void }) {
@@ -265,9 +300,14 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
               <button onClick={() => saveTicket(null)} title="Find the ticket from evidence again">Auto</button>
             </span>
           ) : e.ticket ? (
-            <button className="ticket" title={`Found in ${e.ticket.source}. Click to change.`} onClick={() => setEditingTicket(true)}>
-              {e.ticket.key}
-            </button>
+            <>
+              <button className="ticket" title={`${e.ticket_info?.title ? `${e.ticket_info.title}. ` : ""}Found in ${e.ticket.source}. Click to change.`} onClick={() => setEditingTicket(true)}>
+                {e.ticket.key}
+              </button>
+              {e.ticket_info?.url && <button className="link small" onClick={() => run(() => api.openTicket(e.ticket!.key))}>Open</button>}
+            </>
+          ) : e.suggestion ? (
+            <SuggestionChip e={e} run={run} onOther={() => setEditingTicket(true)} />
           ) : (
             <button className="ticket add" onClick={() => setEditingTicket(true)}>Add ticket</button>
           )}
@@ -294,6 +334,23 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
       </span>
       {grouping !== "session" && e.session_ids.length > 1 && <span className="muted count">{e.session_ids.length} sessions</span>}
     </li>
+  );
+}
+
+/** A ticket "Find tickets" proposed: use it, say no, or type another. */
+function SuggestionChip({ e, run, onOther }: { e: ReportEntry; run: Run; onOther: () => void }) {
+  const s = e.suggestion!;
+  return (
+    <span className="suggestion">
+      <button className="ticket suggested" title={`Suggested: ${s.reason}. Click to open.`} onClick={() => run(() => api.openTicket(s.info.key))}>
+        {s.info.key}
+      </button>
+      {s.by_ai && <span className="tag">AI</span>}
+      {s.info.title && <span className="sugg-title" title={s.reason}>{s.info.title}</span>}
+      <button className="small" onClick={() => run(() => api.setTicket(e.session_ids, s.info.key))}>Use</button>
+      <button className="small" onClick={() => run(() => api.dismissSuggestion(e.session_ids))}>Not this</button>
+      <button className="link small" onClick={onOther}>Other</button>
+    </span>
   );
 }
 

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use chrono::{Duration, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,7 @@ use crate::settings::Settings;
 use crate::reports::{self, Report, ReportQuery};
 use crate::store::{Achievement, Journal};
 use crate::toggl;
+use crate::trackers;
 
 #[derive(Debug, Serialize)]
 pub struct Chip {
@@ -346,8 +347,66 @@ pub fn set_entry_label(p: &Pipeline, session_id: &str, label: &str) -> Result<()
 }
 
 /// Pins a ticket on sessions. `Some("")` means "no ticket"; `None` goes back to detection.
+/// Pinning a ticket also removes the sessions' open suggestions.
 pub fn set_ticket(p: &Pipeline, session_ids: &[String], ticket: Option<String>) -> Result<()> {
-    session_ids.iter().try_for_each(|id| p.store.set_ticket_override(id, ticket.as_deref()))
+    session_ids.iter().try_for_each(|id| p.store.set_ticket_override(id, ticket.as_deref()))?;
+    if ticket.as_deref().is_some_and(|t| !t.trim().is_empty()) {
+        p.store.clear_suggestions(session_ids)?;
+    }
+    Ok(())
+}
+
+/// Hides the sessions' suggestion. The same ticket is never suggested for them again.
+pub fn dismiss_suggestion(p: &Pipeline, session_ids: &[String]) -> Result<()> {
+    p.store.dismiss_suggestions(session_ids)
+}
+
+pub fn tracker_status(p: &Pipeline) -> Result<trackers::TrackerStatus> {
+    Ok(trackers::status(&Settings::load(&p.store)?))
+}
+
+/// Checks the Jira token, saves it to the Keychain, and stores the site and email.
+pub fn connect_jira(p: &Pipeline, site: &str, email: &str, token: &str) -> Result<trackers::jira::JiraAccount> {
+    let site = trackers::jira::normalize_site(site);
+    let account = trackers::jira::connect(&site, email, token)?;
+    let mut s = Settings::load(&p.store)?;
+    s.trackers.jira_site = site;
+    s.trackers.jira_email = email.trim().to_string();
+    s.save(&p.store)?;
+    Ok(account)
+}
+
+/// Opens Atlassian's API token page in the default browser.
+pub fn open_jira_token_page() -> Result<()> {
+    open_in_browser(trackers::jira::TOKEN_PAGE)
+}
+
+fn open_in_browser(url: &str) -> Result<()> {
+    if !url.starts_with("https://") {
+        bail!("only https links open");
+    }
+    std::process::Command::new("open").arg(url).status()?;
+    Ok(())
+}
+
+/// The ticket's page: the link a tracker returned, else the Jira page for a Jira-shaped key.
+fn ticket_url(p: &Pipeline, key: &str) -> Result<Option<String>> {
+    if let Some(info) = p.store.ticket_info()?.remove(key).filter(|i| !i.url.is_empty()) {
+        return Ok(Some(info.url));
+    }
+    let site = Settings::load(&p.store)?.trackers.jira_site;
+    let jira_shaped = key.split_once('-').is_some_and(|(prefix, n)| !prefix.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+    Ok((jira_shaped && !site.is_empty()).then(|| format!("https://{site}/browse/{key}")))
+}
+
+/// Opens the ticket's page in the default browser.
+pub fn open_ticket(p: &Pipeline, key: &str) -> Result<()> {
+    let url = ticket_url(p, key)?.ok_or_else(|| anyhow!("no link known for {key}; run Find tickets or connect Jira"))?;
+    open_in_browser(&url)
+}
+
+pub fn find_tickets(p: &Pipeline, q: &ReportQuery) -> Result<trackers::find::FindResult> {
+    trackers::find::find_tickets(&p.store, q)
 }
 
 /// Writes approved entries as a Toggl CSV in ~/Downloads and shows the file in Finder.

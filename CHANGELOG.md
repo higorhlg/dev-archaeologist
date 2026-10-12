@@ -5,6 +5,29 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.8.0] - 2026-10-12
+
+### Added
+- Ticket sources in Sources. Jira connects with an API token: "Get a token" opens the
+  Atlassian token page in the browser, and the token goes to the Keychain. GitHub uses
+  the accounts the `gh` CLI is signed in with, so it needs no new sign-in. Both only read.
+- "Find tickets" in Reports. For each entry without a ticket it asks the trackers for
+  your own tickets in the range (Jira: assigned to you during the range, or reported or
+  logged by you; GitHub: issues and pull requests that involve you in the report's
+  repos). It ranks them by repo, Jira prefix, day, shared words and ticket numbers
+  named in the work, then suggests the best one. Nothing is set until you accept.
+- Close calls go to the AI in one call per run, with only the entry outline and the
+  candidate titles. Projects that never leave the Mac, or a missing API key, keep the
+  best rule-based guess.
+- A pull request whose title names a known Jira key suggests that Jira key.
+- Suggestions show the ticket title and why it fits, with Use, Not this and Other.
+  "Not this" stops that ticket from coming back for those sessions. "Use N suggested
+  tickets" accepts them all.
+- Tickets with a known link open in the browser from Reports.
+- The journal digest carries the tickets you set or accepted, and the journal may name
+  them. It names no other ticket.
+- `dev-arch find-tickets FROM TO [work|personal|all]`.
+
 ## [0.7.0] - 2026-10-12
 
 ### Added

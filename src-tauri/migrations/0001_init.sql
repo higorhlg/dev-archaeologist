@@ -88,3 +88,19 @@ CREATE TABLE IF NOT EXISTS work_gaps (
   label     TEXT
 );
 CREATE INDEX IF NOT EXISTS work_gaps_day ON work_gaps (day);
+
+CREATE TABLE IF NOT EXISTS ticket_suggestions (
+  session_id TEXT PRIMARY KEY,
+  ticket     TEXT NOT NULL,
+  reason     TEXT NOT NULL,               -- why the ticket fits, shown to the user
+  by_ai      INTEGER NOT NULL DEFAULT 0,  -- 1 when the AI tie-break picked it
+  dismissed  INTEGER NOT NULL DEFAULT 0   -- 1 when the user said no; the same ticket is never suggested again
+);
+
+CREATE TABLE IF NOT EXISTS ticket_info (
+  ticket     TEXT PRIMARY KEY,            -- SHOP-1261 or insight-ui#128
+  title      TEXT NOT NULL,
+  url        TEXT NOT NULL,
+  tracker    TEXT NOT NULL,               -- jira | github
+  fetched_at INTEGER NOT NULL
+);

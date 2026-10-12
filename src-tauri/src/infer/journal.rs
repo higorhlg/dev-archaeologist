@@ -1,16 +1,14 @@
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::client::{call_structured, StructuredCall};
 use super::digest::{self, SessionDigest};
-use super::models;
 use crate::settings::Settings;
 use crate::store::{Journal, JournalLine, Store};
 
-const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const KEYCHAIN_SERVICE: &str = "dev-archaeologist";
 const KEYCHAIN_USER: &str = "anthropic-api-key";
 
@@ -19,6 +17,7 @@ into a short engineering journal written to them in the second person.
 
 Ground rules:
 - Use only facts in the digest. Do not invent outcomes, metrics, ticket numbers, people or reasons.
+- A session's `ticket` is the ticket the programmer confirmed for it. You may name its key in a line about that session. Name no other ticket.
 - Durations: use the activeMin values as given, or vaguer words (\"most of the morning\"). Never add precision.
 - Every journal line must cite one or more ids from the digest (session, prompt, commit, test or achievement ids) in `cites`.
 - Session labels: at most 8 words, name the work itself (\"Redis cache for market data\"), not the tools.
@@ -78,48 +77,16 @@ pub fn has_api_key() -> bool {
 }
 
 fn call_model(model: &str, key: &str, digest: &SessionDigest) -> Result<ModelOutput> {
-    let fallback = models::supports_default_fallback(model);
-    let mut body = json!({
-        "model": model,
-        "max_tokens": 16000,
-        "system": SYSTEM_PROMPT,
-        "output_config": {"effort": "medium", "format": {"type": "json_schema", "schema": output_schema()}},
-        "messages": [{"role": "user", "content": serde_json::to_string(digest)?}],
-    });
-    if fallback {
-        body["fallbacks"] = json!("default");
-    }
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(180)))
-        .http_status_as_error(false)
-        .build()
-        .into();
-    let mut req = agent
-        .post(API_URL)
-        .header("x-api-key", key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json");
-    if fallback {
-        req = req.header("anthropic-beta", models::FALLBACK_BETA);
-    }
-    let mut resp = req.send_json(&body).context("call the Claude API")?;
-    let status = resp.status().as_u16();
-    let v: Value = resp.body_mut().read_json()?;
-    if status != 200 {
-        let msg = v.pointer("/error/message").and_then(Value::as_str).unwrap_or("unknown error");
-        bail!("Claude API returned {status}: {msg}");
-    }
-    match v.get("stop_reason").and_then(Value::as_str) {
-        Some("refusal") => bail!("the model declined this digest"),
-        Some("max_tokens") => bail!("the journal was cut off at max_tokens"),
-        _ => {}
-    }
-    let text = v["content"]
-        .as_array()
-        .and_then(|blocks| blocks.iter().find(|b| b["type"] == "text"))
-        .and_then(|b| b["text"].as_str())
-        .ok_or_else(|| anyhow!("no text block in the response"))?;
-    Ok(serde_json::from_str(text)?)
+    call_structured(StructuredCall {
+        model,
+        key,
+        system: SYSTEM_PROMPT,
+        input: serde_json::to_string(digest)?,
+        schema: output_schema(),
+        max_tokens: 16000,
+        effort: "medium",
+        timeout_secs: 180,
+    })
 }
 
 /// Keeps only journal lines whose citations all exist in the digest.

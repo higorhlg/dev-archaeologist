@@ -109,7 +109,23 @@ export type Settings = {
   schedule_asked: boolean;
   contexts: ContextRules;
   calendar_excluded: string[];
+  trackers: TrackerSettings;
 };
+
+export type TrackerSettings = { jira_site: string; jira_email: string; github: boolean };
+export type TrackerStatus = {
+  jira_site: string;
+  jira_email: string;
+  jira_connected: boolean;
+  jira_site_guess: string | null;
+  jira_email_guess: string | null;
+  github_enabled: boolean;
+  github_accounts: string[];
+};
+export type JiraAccount = { display_name: string; email: string };
+export type FindResult = { checked: number; suggested: number; by_ai: number; looked_in: string[]; errors: string[] };
+export type TicketInfo = { key: string; title: string; url: string; tracker: string };
+export type Suggestion = { info: TicketInfo; reason: string; by_ai: boolean };
 
 export type Status = {
   event_counts: [string, number][];
@@ -136,6 +152,8 @@ export type ReportEntry = {
   description: string;
   tags: string[];
   ticket: Ticket | null;
+  ticket_info: TicketInfo | null;
+  suggestion: Suggestion | null;
   session_ids: string[];
   approved: boolean;
   reasons: string[];
@@ -217,6 +235,12 @@ export const api = {
   connectCalendar: () => invoke<CalendarStatus>("connect_calendar"),
   reimportMeetings: () => invoke<number>("reimport_meetings"),
   aiModels: () => invoke<ModelInfo[]>("ai_models"),
+  trackerStatus: () => invoke<TrackerStatus>("tracker_status"),
+  connectJira: (site: string, email: string, token: string) => invoke<JiraAccount>("connect_jira", { site, email, token }),
+  openJiraTokenPage: () => invoke<void>("open_jira_token_page"),
+  openTicket: (key: string) => invoke<void>("open_ticket", { key }),
+  findTickets: (query: ReportQuery) => invoke<FindResult>("find_tickets", { query }),
+  dismissSuggestion: (sessionIds: string[]) => invoke<void>("dismiss_suggestion", { sessionIds }),
   daysNeedingLabels: (query: ReportQuery) => invoke<string[]>("days_needing_labels", { query }),
 };
 

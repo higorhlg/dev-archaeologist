@@ -2,27 +2,25 @@
 //! Optional. CSV export works without it.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::http::{self, KeychainItem};
 use crate::reports::{exportable, Report, ReportEntry};
 use crate::store::Store;
 
 const BASE: &str = "https://api.track.toggl.com/api/v9";
-const KEYCHAIN_SERVICE: &str = "dev-archaeologist";
-const KEYCHAIN_USER: &str = "toggl-api-token";
+const TOKEN: KeychainItem = KeychainItem("toggl-api-token");
 
 pub fn token() -> Option<String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER).ok().and_then(|e| e.get_password().ok()).filter(|t| !t.trim().is_empty())
+    TOKEN.get()
 }
 
 pub fn save_token(token: &str) -> Result<()> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)?.set_password(token.trim())?;
-    Ok(())
+    TOKEN.set(token)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,21 +45,15 @@ pub struct SendResult {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(30))).http_status_as_error(false).build().into()
+    http::agent(30)
 }
 
 fn basic_auth(token: &str) -> String {
-    use base64_lite::encode;
-    format!("Basic {}", encode(format!("{token}:api_token").as_bytes()))
+    http::basic_auth(token, "api_token")
 }
 
-fn read(mut resp: ureq::http::Response<ureq::Body>) -> Result<Value> {
-    let status = resp.status().as_u16();
-    let text = resp.body_mut().read_to_string()?;
-    if !(200..300).contains(&status) {
-        bail!("Toggl returned {status}: {}", text.trim().chars().take(200).collect::<String>());
-    }
-    Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+fn read(resp: ureq::http::Response<ureq::Body>) -> Result<Value> {
+    http::read_json(resp, "Toggl")
 }
 
 fn get(token: &str, path: &str) -> Result<Value> {
@@ -124,33 +116,4 @@ pub fn send(store: &Store, report: &Report, workspace_id: i64) -> Result<SendRes
         }
     }
     Ok(result)
-}
-
-/// Standard base64 for the Basic auth header; avoids a dependency for one call site.
-mod base64_lite {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    pub fn encode(input: &[u8]) -> String {
-        let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-        for chunk in input.chunks(3) {
-            let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-            let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
-            for i in 0..4 {
-                if i <= chunk.len() {
-                    out.push(TABLE[(n >> (18 - 6 * i) & 63) as usize] as char);
-                } else {
-                    out.push('=');
-                }
-            }
-        }
-        out
-    }
-
-    #[cfg(test)]
-    #[test]
-    fn matches_rfc4648() {
-        assert_eq!(encode(b"f"), "Zg==");
-        assert_eq!(encode(b"fo"), "Zm8=");
-        assert_eq!(encode(b"foobar"), "Zm9vYmFy");
-    }
 }
