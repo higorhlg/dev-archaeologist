@@ -5,6 +5,23 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.6.0] - 2026-10-12
+
+### Added
+- A Work / Personal / All switch at the bottom of the left rail. It filters the day
+  view, the project heatmap and reports, and it is saved. The personal side hides work
+  hours and gaps, which belong to work.
+- Sources › Work and personal: personal folders, a "Find in my git config" button that
+  reads `includeIf` work identities again, and a "Save sides" button for these rules.
+
+### Fixed
+- Settings saves merge only the changed sections, so the rail switch, Reports and
+  Sources never overwrite each other's changes.
+- The folder and email boxes in Sources accept new lines while typing.
+
+### Changed
+- Reports follow the rail switch and no longer have their own side control.
+
 ## [0.5.0] - 2026-10-12
 
 ### Added

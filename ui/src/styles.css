@@ -293,3 +293,14 @@ input[role="switch"]:checked::after { left: 16px; }
 .contexts { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
 .contexts li { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-top: 1px solid var(--rule-soft); font-size: 13px; }
 .contexts .seg button { padding: 3px 10px; font-size: 12px; }
+
+/* ---------- side switch ---------- */
+.side-switch { margin-top: auto; display: grid; gap: 2px; padding: 8px 0 0; border-top: 1px solid var(--rule); }
+.side-switch button { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.side-switch .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--muted); }
+.side-switch .dot.work { border-color: var(--amber); }
+.side-switch .dot.personal { border-color: var(--focus); }
+.side-switch .dot.all { border-color: var(--ink-2); }
+.side-switch button.on .dot.work { background: var(--amber); }
+.side-switch button.on .dot.personal { background: var(--focus); }
+.side-switch button.on .dot.all { background: var(--ink-2); }

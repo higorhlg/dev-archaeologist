@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, dayKey, type Status } from "./api";
+import { api, dayKey, type ContextFilter, type Status } from "./api";
 import Onboarding from "./Onboarding";
 import Timeline from "./Timeline";
 import Journal from "./Journal";
@@ -9,6 +9,12 @@ import Reports from "./Reports";
 import ScheduleStep from "./ScheduleStep";
 
 type View = "day" | "journal" | "projects" | "reports" | "sources";
+
+const SIDES: { id: ContextFilter; label: string }[] = [
+  { id: "work", label: "Work" },
+  { id: "personal", label: "Personal" },
+  { id: "all", label: "All" },
+];
 
 const NAV: { id: View; label: string }[] = [
   { id: "day", label: "Day" },
@@ -29,6 +35,13 @@ export default function App() {
   }, []);
 
   useEffect(refresh, [refresh]);
+
+  const side: ContextFilter = status?.settings.report_prefs.context ?? "work";
+  const setSide = async (context: ContextFilter) => {
+    if (!status) return;
+    await api.patchSettings({ report_prefs: { ...status.settings.report_prefs, context } });
+    refresh();
+  };
 
   if (error) return <p className="fatal">The app could not read its local database: {error}</p>;
   if (!status) return null;
@@ -53,14 +66,23 @@ export default function App() {
             {n.label}
           </button>
         ))}
+        <div className="side-switch" role="radiogroup" aria-label="Show work, personal or all">
+          {SIDES.map((x) => (
+            <button key={x.id} role="radio" aria-checked={side === x.id} className={side === x.id ? "on" : ""} onClick={() => setSide(x.id)}>
+              <i className={`dot ${x.id}`} />
+              {x.label}
+            </button>
+          ))}
+        </div>
       </nav>
       <main className="main">
-        {view === "day" && <Timeline day={day} setDay={setDay} days={status.days} />}
+        {view === "day" && <Timeline day={day} setDay={setDay} days={status.days} side={side} />}
         {view === "journal" && (
           <Journal day={day} setDay={setDay} hasKey={status.has_api_key} goToSources={() => setView("sources")} />
         )}
         {view === "projects" && (
           <ProjectTimeline
+            side={side}
             onPickDay={(d) => {
               setDay(d);
               setView("day");
@@ -70,6 +92,7 @@ export default function App() {
         {view === "reports" && (
           <Reports
             status={status}
+            side={side}
             onSaved={refresh}
             onOpenDay={(d) => {
               setDay(d);

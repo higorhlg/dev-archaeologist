@@ -13,7 +13,9 @@ use crate::infer::journal;
 use crate::pipeline::Pipeline;
 use crate::sessions::{attribute::attribute, cluster::evidence_counts, gaps::{work_windows, Gap}, Session};
 use crate::settings::WorkSchedule;
-use crate::contexts::Context;
+use crate::contexts::{Context, ContextRules};
+use crate::reports::ContextFilter;
+use std::collections::HashMap;
 use crate::settings::Settings;
 use crate::reports::{self, Report, ReportQuery};
 use crate::store::{Achievement, Journal};
@@ -130,30 +132,43 @@ pub fn measure_day(day: &str, windows: &[(i64, i64)], observed_min: i64, gaps: &
     }
 }
 
-pub fn day_view(p: &Pipeline, day: &str) -> Result<DayView> {
+/// Work or personal, for each session's project.
+fn session_context(rules: &ContextRules, samples: &HashMap<String, String>, s: &Session) -> Context {
+    let project = s.project.as_deref().unwrap_or_default();
+    rules.resolve(project, samples.get(project).map(String::as_str))
+}
+
+/// One day for one side. Work hours, gaps and the schedule belong to work, so the
+/// personal side shows none of them.
+pub fn day_view(p: &Pipeline, day: &str, side: ContextFilter) -> Result<DayView> {
+    let settings = Settings::load(&p.store)?;
+    let samples = p.store.project_sample_paths()?;
     let mut loaded = Vec::new();
     for s in p.store.sessions_for_day(day)? {
-        let events = p.store.events_by_ids(&p.store.session_event_ids(&s.id)?)?;
-        loaded.push((s, events));
+        let context = session_context(&settings.contexts, &samples, &s);
+        if side.admits(context) {
+            let events = p.store.events_by_ids(&p.store.session_event_ids(&s.id)?)?;
+            loaded.push((s, events, context));
+        }
     }
-    let active = day_active_min(&loaded);
-    let rules = Settings::load(&p.store)?.contexts;
-    let samples = p.store.project_sample_paths()?;
+    let pairs: Vec<(Session, Vec<WorkEvent>)> = loaded.iter().map(|(s, e, _)| (s.clone(), e.clone())).collect();
+    let active = day_active_min(&pairs);
     let sessions = loaded
         .into_iter()
-        .map(|(s, events)| {
+        .map(|(s, events, context)| {
             let refs: Vec<&WorkEvent> = events.iter().collect();
             let chips = evidence_counts(&refs).into_iter().map(|(label, n)| Chip { label, n }).collect();
-            let project = s.project.clone().unwrap_or_default();
-            let context = rules.resolve(&project, samples.get(&project).map(String::as_str));
             SessionView { session: s, chips, context }
         })
         .collect();
-    let gaps = p.store.gaps_between_days(day, day)?;
-    let settings = Settings::load(&p.store)?;
+    let shows_work_hours = side != ContextFilter::Personal;
+    let gaps = if shows_work_hours { p.store.gaps_between_days(day, day)? } else { vec![] };
     let date = NaiveDate::parse_from_str(day, "%Y-%m-%d")?;
-    let windows = settings.schedule.as_ref().map(|s| work_windows(date, s)).unwrap_or_default();
-    let schedule = settings.schedule.as_ref().map(|_| measure_day(day, &windows, active, &gaps));
+    let windows = match (&settings.schedule, shows_work_hours) {
+        (Some(s), true) => work_windows(date, s),
+        _ => vec![],
+    };
+    let schedule = settings.schedule.as_ref().filter(|_| shows_work_hours).map(|_| measure_day(day, &windows, active, &gaps));
     Ok(DayView {
         day: day.to_string(),
         active_min: active,
@@ -170,9 +185,11 @@ pub fn session_events(p: &Pipeline, session_id: &str) -> Result<Vec<WorkEvent>> 
     p.store.events_by_ids(&p.store.session_event_ids(session_id)?)
 }
 
-pub fn projects(p: &Pipeline, from: &str, to: &str) -> Result<Vec<ProjectRow>> {
+pub fn projects(p: &Pipeline, from: &str, to: &str, side: ContextFilter) -> Result<Vec<ProjectRow>> {
+    let rules = Settings::load(&p.store)?.contexts;
+    let samples = p.store.project_sample_paths()?;
     let mut rows: BTreeMap<String, ProjectRow> = BTreeMap::new();
-    for s in p.store.sessions_between_days(from, to)? {
+    for s in p.store.sessions_between_days(from, to)?.into_iter().filter(|s| side.admits(session_context(&rules, &samples, s))) {
         let name = s.project.clone().unwrap_or_else(|| "Other".into());
         let row = rows.entry(name.clone()).or_insert(ProjectRow { project: name, total_min: 0, days: BTreeMap::new() });
         row.total_min += s.active_min;
@@ -249,6 +266,26 @@ pub fn rebuild_day(p: &Pipeline, day: &str) -> Result<usize> {
     p.rebuild_day(NaiveDate::parse_from_str(day, "%Y-%m-%d")?)
 }
 
+/// Merges the given top-level settings sections into the stored settings. Each screen
+/// sends only what it changed, so two screens never overwrite each other.
+pub fn patch_settings(p: &Pipeline, patch: serde_json::Value) -> Result<Settings> {
+    let mut current = serde_json::to_value(Settings::load(&p.store)?)?;
+    if let (Some(cur), Some(changes)) = (current.as_object_mut(), patch.as_object()) {
+        for (k, v) in changes {
+            cur.insert(k.clone(), v.clone());
+        }
+    }
+    let merged: Settings = serde_json::from_value(current)?;
+    merged.save(&p.store)?;
+    Ok(merged)
+}
+
+/// Reads the work folders and emails from the global git config again.
+pub fn detect_contexts() -> ContextRules {
+    let (work_paths, work_emails) = crate::contexts::detect_work_identities();
+    ContextRules { work_paths, work_emails, ..ContextRules::default() }
+}
+
 pub fn save_settings(p: &Pipeline, s: &Settings) -> Result<()> {
     s.save(&p.store)
 }
@@ -277,7 +314,7 @@ pub fn report_days(p: &Pipeline, q: &ReportQuery) -> Result<Vec<DaySchedule>> {
         let key = day.format("%Y-%m-%d").to_string();
         let windows = work_windows(day, &schedule);
         if !windows.is_empty() {
-            let observed = day_view(p, &key)?.active_min;
+            let observed = day_view(p, &key, ContextFilter::Work)?.active_min;
             out.push(measure_day(&key, &windows, observed, &p.store.gaps_between_days(&key, &key)?));
         }
         day = day.succ_opt().unwrap();

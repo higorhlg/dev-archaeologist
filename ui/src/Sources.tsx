@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Context, type ModelInfo, type ProjectContext, type Settings, type Status } from "./api";
+import { api, type Context, type ContextRules, type ModelInfo, type ProjectContext, type Settings, type Status } from "./api";
 import ScheduleStep from "./ScheduleStep";
 
 type Toggle = { key: keyof Settings["sources"]; label: string; note: string; disabled?: boolean };
@@ -27,7 +27,14 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
   const [saved, setSaved] = useState<string | null>(null);
 
   const save = async () => {
-    await api.saveSettings({ ...s, repo_roots: lines(roots), excluded_paths: lines(excluded), cloud_opt_out: lines(optOut) });
+    await api.patchSettings({
+      sources: s.sources,
+      repo_roots: lines(roots),
+      excluded_paths: lines(excluded),
+      cloud_opt_out: lines(optOut),
+      model: s.model,
+      toggl: s.toggl,
+    });
     setSaved("Settings saved. Collector changes apply the next time the app opens.");
     onSaved();
   };
@@ -95,7 +102,7 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
         <ScheduleStep compact initial={status.settings.schedule} projects={Object.keys(status.settings.toggl.project_map)} onDone={onSaved} />
       </section>
 
-      <WorkAndPersonal settings={s} onRules={(contexts) => setS({ ...s, contexts })} onPinned={onSaved} />
+      <WorkAndPersonal rules={status.settings.contexts} onSaved={onSaved} />
 
       <section>
         <h2>Where to look</h2>
@@ -183,21 +190,42 @@ function ModelPicker({ value, onChange }: { value: string; onChange: (model: str
   );
 }
 
-/** Shows which projects are work, from the git identity rules, and lets the user pin one. */
-function WorkAndPersonal({ settings, onRules, onPinned }: { settings: Settings; onRules: (r: Settings["contexts"]) => void; onPinned: () => void }) {
+/** Work and personal folders and emails, seeded from the git config and editable here.
+ * Saves only the side rules, then shows how each project falls out. */
+function WorkAndPersonal({ rules, onSaved }: { rules: ContextRules; onSaved: () => void }) {
   const [projects, setProjects] = useState<ProjectContext[]>([]);
+  const [work, setWork] = useState(rules.work_paths.join("\n"));
+  const [personal, setPersonal] = useState(rules.personal_paths.join("\n"));
+  const [emails, setEmails] = useState(rules.work_emails.join("\n"));
+  const [note, setNote] = useState<string | null>(null);
+
   const load = () => api.projectContexts().then(setProjects);
   useEffect(() => {
     load();
   }, []);
-  const r = settings.contexts;
+
+  const saveRules = async (next: Partial<ContextRules>) => {
+    await api.patchSettings({ contexts: { ...rules, ...next } });
+    onSaved();
+    load();
+  };
+  const save = async () => {
+    await saveRules({ work_paths: lines(work), personal_paths: lines(personal), work_emails: lines(emails) });
+    setNote("Saved. Reports and the side switch use these rules now.");
+  };
+  const detect = async () => {
+    const found = await api.detectContexts();
+    setWork(found.work_paths.join("\n"));
+    setEmails(found.work_emails.join("\n"));
+    setNote(
+      found.work_paths.length
+        ? `Found ${found.work_paths.length} work ${found.work_paths.length === 1 ? "folder" : "folders"} in your git config. Save to use them.`
+        : "Your global git config has no includeIf work identity. Add folders by hand.",
+    );
+  };
   const pin = async (project: string, context: Context | null) => {
     await api.setProjectContext(project, context);
-    const overrides = { ...r.overrides };
-    if (context) overrides[project] = context;
-    else delete overrides[project];
-    onRules({ ...r, overrides });
-    onPinned();
+    onSaved();
     load();
   };
 
@@ -205,17 +233,26 @@ function WorkAndPersonal({ settings, onRules, onPinned }: { settings: Settings; 
     <section>
       <h2>Work and personal</h2>
       <p className="muted">
-        Reports show work by default, and personal time never goes to Toggl. A project is work when it sits in a work
-        folder or its repo commits with a work email. Your git config sets both.
+        A project is work when it sits in a work folder, or when its repo commits with a work email. Personal folders win
+        over both. Anything else is personal. Personal time never goes to Toggl.
       </p>
       <label className="area">
         Work folders, one per line
-        <textarea rows={2} value={r.work_paths.join("\n")} onChange={(e) => onRules({ ...r, work_paths: lines(e.target.value) })} />
+        <textarea rows={2} value={work} placeholder="~/work" onChange={(e) => setWork(e.target.value)} />
+      </label>
+      <label className="area">
+        Personal folders, one per line
+        <textarea rows={2} value={personal} placeholder="~/side-projects" onChange={(e) => setPersonal(e.target.value)} />
       </label>
       <label className="area">
         Work emails, one per line
-        <textarea rows={1} value={r.work_emails.join("\n")} onChange={(e) => onRules({ ...r, work_emails: lines(e.target.value) })} />
+        <textarea rows={1} value={emails} placeholder="you@company.com" onChange={(e) => setEmails(e.target.value)} />
       </label>
+      <div className="actions">
+        <button className="primary" onClick={save}>Save sides</button>
+        <button onClick={detect}>Find in my git config</button>
+        {note && <span className="muted">{note}</span>}
+      </div>
       <ul className="contexts">
         {projects.map((p) => (
           <li key={p.project}>

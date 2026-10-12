@@ -26,11 +26,6 @@ const RANGES: { id: string; label: string }[] = [
   { id: "this_month", label: "This month" },
   { id: "last_month", label: "Last month" },
 ];
-const CONTEXTS: { id: ContextFilter; label: string }[] = [
-  { id: "work", label: "Work" },
-  { id: "personal", label: "Personal" },
-  { id: "all", label: "All" },
-];
 const GROUPINGS: { id: Grouping; label: string }[] = [
   { id: "ticket_day", label: "Per ticket" },
   { id: "session", label: "Per session" },
@@ -60,9 +55,9 @@ function rangeDays(range: string): [string, string] {
   }
 }
 
-type Props = { status: Status; onSaved: () => void; onOpenDay: (day: string) => void; goToSources: () => void };
+type Props = { status: Status; side: ContextFilter; onSaved: () => void; onOpenDay: (day: string) => void; goToSources: () => void };
 
-export default function Reports({ status, onSaved, onOpenDay, goToSources }: Props) {
+export default function Reports({ status, side, onSaved, onOpenDay, goToSources }: Props) {
   const [prefs, setPrefs] = useState<ReportPrefs>(status.settings.report_prefs);
   const [report, setReport] = useState<Report | null>(null);
   const [unlabelled, setUnlabelled] = useState<string[]>([]);
@@ -74,8 +69,8 @@ export default function Reports({ status, onSaved, onOpenDay, goToSources }: Pro
 
   const [from, to] = rangeDays(prefs.range);
   const query: ReportQuery = useMemo(
-    () => ({ from, to, grouping: prefs.grouping, tickets: prefs.tickets, context: prefs.context ?? "work" }),
-    [from, to, prefs.grouping, prefs.tickets, prefs.context],
+    () => ({ from, to, grouping: prefs.grouping, tickets: prefs.tickets, context: side }),
+    [from, to, prefs.grouping, prefs.tickets, side],
   );
 
   const load = useCallback(() => {
@@ -89,7 +84,7 @@ export default function Reports({ status, onSaved, onOpenDay, goToSources }: Pro
   /** The last applied options become the saved preference. */
   const applyPrefs = async (next: ReportPrefs) => {
     setPrefs(next);
-    await api.saveSettings({ ...status.settings, report_prefs: next });
+    await api.patchSettings({ report_prefs: { ...next, context: side } });
     onSaved();
   };
 
@@ -126,12 +121,11 @@ export default function Reports({ status, onSaved, onOpenDay, goToSources }: Pro
       <header className="day-head">
         <h1>Reports</h1>
         <p className="day-total">
-          {longDay(from)} to {longDay(to)}
+          {side === "all" ? "Work and personal" : side === "work" ? "Work" : "Personal"}, {longDay(from)} to {longDay(to)}
         </p>
       </header>
 
       <div className="report-controls">
-        <Seg label="Side" options={CONTEXTS} value={prefs.context ?? "work"} onChange={(context) => applyPrefs({ ...prefs, context })} />
         <Seg label="Range" options={RANGES} value={prefs.range} onChange={(range) => applyPrefs({ ...prefs, range })} />
         <Seg label="Entries" options={GROUPINGS} value={prefs.grouping} onChange={(grouping) => applyPrefs({ ...prefs, grouping })} />
         <Seg label="Tickets" options={TICKET_MODES} value={prefs.tickets} onChange={(tickets) => applyPrefs({ ...prefs, tickets })} />
@@ -353,7 +347,7 @@ function MappingPanel({ status, report, onSaved }: { status: Status; report: Rep
     setMap({ ...map, [p]: next });
   };
   const save = async () => {
-    await api.saveSettings({ ...settings, toggl: { ...settings.toggl, project_map: map } });
+    await api.patchSettings({ toggl: { ...settings.toggl, project_map: map } });
     onSaved();
   };
 

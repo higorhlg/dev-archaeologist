@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, dayKey, minutes, shiftDay, stratum, type ProjectRow } from "./api";
+import { api, dayKey, minutes, shiftDay, stratum, type ContextFilter, type ProjectRow } from "./api";
 
 const RANGES = [30, 60, 90];
 
 /** Projects across weeks: one row per project, one cell per day, shaded by active time. */
-export default function ProjectTimeline({ onPickDay }: { onPickDay: (day: string) => void }) {
+export default function ProjectTimeline({ onPickDay, side }: { onPickDay: (day: string) => void; side: ContextFilter }) {
   const [range, setRange] = useState(60);
   const [rows, setRows] = useState<ProjectRow[]>([]);
   const to = dayKey(new Date());
   const from = shiftDay(to, -(range - 1));
 
   useEffect(() => {
-    api.projects(from, to).then(setRows);
-  }, [from, to]);
+    api.projects(from, to, side).then(setRows);
+  }, [from, to, side]);
 
   const days = useMemo(() => Array.from({ length: range }, (_, i) => shiftDay(from, i)), [from, range]);
   const max = Math.max(60, ...rows.flatMap((r) => Object.values(r.days)));

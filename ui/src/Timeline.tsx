@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, dayKey, hhmm, longDay, minutes, shiftDay, stratum, type DaySchedule, type DayView, type Gap, type Session, type WorkEvent } from "./api";
+import { api, dayKey, hhmm, longDay, minutes, shiftDay, stratum, type ContextFilter, type DaySchedule, type DayView, type Gap, type Session, type WorkEvent } from "./api";
 
-type Props = { day: string; setDay: (d: string) => void; days: string[] };
+type Props = { day: string; setDay: (d: string) => void; days: string[]; side: ContextFilter };
 
-export default function Timeline({ day, setDay, days }: Props) {
+export default function Timeline({ day, setDay, days, side }: Props) {
   const [view, setView] = useState<DayView | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    api.day(day).then(setView).catch((e) => setError(String(e)));
-  }, [day]);
+    api.day(day, side).then(setView).catch((e) => setError(String(e)));
+  }, [day, side]);
 
   useEffect(() => {
     setSelected(null);

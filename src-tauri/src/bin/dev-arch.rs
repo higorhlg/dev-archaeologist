@@ -28,7 +28,7 @@ fn arg_day(args: &[String]) -> String {
 }
 
 fn print_day(p: &Pipeline, day: &str) -> Result<()> {
-    let v = api::day_view(p, day)?;
+    let v = api::day_view(p, day, devarch::reports::ContextFilter::All)?;
     println!("{} · {} min active · {} sessions", v.day, v.active_min, v.sessions.len());
     for s in &v.sessions {
         let fmt = |ms: i64| chrono::DateTime::from_timestamp_millis(ms).unwrap().with_timezone(&Local).format("%H:%M").to_string();
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
         }
         Some("gaps") => {
             let day = arg_day(&args);
-            let v = api::day_view(&p, &day)?;
+            let v = api::day_view(&p, &day, devarch::reports::ContextFilter::All)?;
             if let Some(s) = &v.schedule {
                 println!("{day}: schedule {} · observed {} · filled {} · bridge pending {} · unaccounted {}", s.schedule_min, s.observed_min, s.filled_min, s.pending_bridge_min, s.unaccounted_min);
             }
