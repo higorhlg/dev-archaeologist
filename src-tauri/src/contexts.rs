@@ -101,6 +101,9 @@ impl ContextRules {
             return *c;
         }
         let Some(path) = path else { return Context::Work };
+        if let Some(account) = path.strip_prefix(crate::adapters::calendar::PATH_PREFIX) {
+            return if self.is_work_account(account) { Context::Work } else { Context::Personal };
+        }
         let under = |prefixes: &[String]| prefixes.iter().any(|p| is_under(path, &expand(p)));
         if under(&self.personal_paths) {
             return Context::Personal;
@@ -113,6 +116,17 @@ impl ContextRules {
             Some(e) if self.work_emails.contains(&e) => Context::Work,
             _ => Context::Personal,
         }
+    }
+}
+
+impl ContextRules {
+    /// A calendar account is work when it is a work email or shares a work email's domain.
+    pub fn is_work_account(&self, account: &str) -> bool {
+        let account = account.to_lowercase();
+        let domain = |e: &str| e.rsplit_once('@').map(|(_, d)| d.to_string());
+        self.work_emails.iter().any(|w| {
+            *w == account || (domain(w).is_some() && domain(w) == domain(&account))
+        })
     }
 }
 
@@ -133,6 +147,9 @@ mod tests {
         assert_eq!(rules.resolve("wx", Some("/wx/a")), Context::Personal, "a sibling with a longer name");
         assert_eq!(rules.resolve("blog", Some("/tmp/no-repo-here")), Context::Personal);
         assert_eq!(rules.resolve("Meetings", None), Context::Work);
+        rules.work_emails = vec!["me@corp.com".into()];
+        assert_eq!(rules.resolve("Meetings", Some("calendar://team@corp.com")), Context::Work);
+        assert_eq!(rules.resolve("Personal events", Some("calendar://me@gmail.com")), Context::Personal);
         rules.overrides.insert("api".into(), Context::Personal);
         assert_eq!(rules.resolve("api", Some("/w/api/src")), Context::Personal);
     }

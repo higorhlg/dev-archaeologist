@@ -58,6 +58,7 @@ pub mod kind {
     pub const APP_ACTIVE: &str = "app_active";
     pub const IDLE_START: &str = "idle_start";
     pub const IDLE_END: &str = "idle_end";
+    pub const MEETING: &str = "meeting";
 }
 
 /// Cuts a string to at most `max` chars on a char boundary.

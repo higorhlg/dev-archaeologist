@@ -37,6 +37,9 @@ impl Pipeline {
                 if e.project.is_none() {
                     e.project = e.path.as_deref().and_then(|p| self.resolver.resolve(p, &rules));
                 }
+                if e.source == crate::adapters::calendar::SOURCE {
+                    e.project = Some(meeting_project(&settings, e.path.as_deref()));
+                }
                 if e.project.is_none() && is_agent(&e) {
                     e.project = e.path.as_deref().and_then(workspace_folder);
                 }
@@ -87,6 +90,12 @@ impl Pipeline {
         }
         Ok(n)
     }
+}
+
+/// Work meetings share one project; meetings from other accounts sit apart.
+fn meeting_project(settings: &Settings, path: Option<&str>) -> String {
+    let account = path.and_then(|p| p.strip_prefix(crate::adapters::calendar::PATH_PREFIX)).unwrap_or_default();
+    if settings.contexts.is_work_account(account) { "Meetings".into() } else { "Personal events".into() }
 }
 
 fn is_agent(e: &WorkEvent) -> bool {

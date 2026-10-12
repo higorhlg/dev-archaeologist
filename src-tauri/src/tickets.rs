@@ -23,6 +23,7 @@ const ISSUE_LINK: u32 = 3;
 const PR_LINK: u32 = 2;
 const COMMIT_REF: u32 = 3;
 const PROMPT: u32 = 1;
+const MEETING_TITLE: u32 = 2;
 
 fn jira_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -125,6 +126,11 @@ pub fn detect(events: &[WorkEvent], branch: Option<&str>, project: Option<&str>,
                     if let Some(n) = c.get(1).or_else(|| c.get(2)) {
                         t.add(gh(n.as_str()), COMMIT_REF, "commit");
                     }
+                }
+            }
+            kind::MEETING => {
+                for c in jira_re().captures_iter(text).filter(|c| known(&c[0])) {
+                    t.add(c[0].to_string(), MEETING_TITLE, "meeting");
                 }
             }
             kind::PROMPT => {

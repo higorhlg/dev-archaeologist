@@ -6,7 +6,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::adapters::{claude_code, codex, git};
+use crate::adapters::{calendar, claude_code, codex, git};
 use crate::event::WorkEvent;
 use crate::pipeline::Pipeline;
 use crate::project::find_repo_root;
@@ -51,6 +51,7 @@ fn zsh_history_has_times() -> bool {
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct BackfillReport {
+    pub meetings: usize,
     pub claude_code: usize,
     pub codex: usize,
     pub git: usize,
@@ -76,11 +77,26 @@ pub fn backfill(pipeline: &Pipeline, since: DateTime<Utc>) -> Result<BackfillRep
             report.git += pipeline.ingest(events)?;
         }
     }
+    report.meetings = import_meetings(pipeline, since)?;
     report.sessions = pipeline.rebuild_range(since, Utc::now())?;
     let mut s = Settings::load(&pipeline.store)?;
     s.backfill_done = true;
     s.save(&pipeline.store)?;
     Ok(report)
+}
+
+/// Reads meetings that already ended, from calendars the user did not exclude.
+/// Does nothing until macOS grants Calendar access.
+pub fn import_meetings(pipeline: &Pipeline, since: DateTime<Utc>) -> Result<usize> {
+    let settings = Settings::load(&pipeline.store)?;
+    if !settings.sources.calendar {
+        return Ok(0);
+    }
+    let ended = calendar::meetings(since, Utc::now(), &settings.calendar_excluded)
+        .into_iter()
+        .filter(|e| e.ts.timestamp_millis() + e.meta_i64("dur_ms").unwrap_or(0) <= Utc::now().timestamp_millis())
+        .collect();
+    pipeline.ingest(ended)
 }
 
 /// Repos under the roots, plus repos that agent sessions worked in.

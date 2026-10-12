@@ -304,3 +304,8 @@ input[role="switch"]:checked::after { left: 16px; }
 .side-switch button.on .dot.work { background: var(--amber); }
 .side-switch button.on .dot.personal { background: var(--focus); }
 .side-switch button.on .dot.all { background: var(--ink-2); }
+
+/* ---------- calendar ---------- */
+.cal-account { display: grid; gap: 4px; }
+.cal-account b { font-size: 13px; }
+.toggles.compact label { padding: 4px 0; align-items: center; }

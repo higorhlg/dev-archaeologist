@@ -532,3 +532,36 @@ pub fn set_project_context(p: &Pipeline, project: &str, context: Option<Context>
     };
     s.save(&p.store)
 }
+
+#[derive(Debug, Serialize)]
+pub struct CalendarStatus {
+    pub access: crate::adapters::calendar::Access,
+    pub calendars: Vec<crate::adapters::calendar::CalendarInfo>,
+    pub excluded: Vec<String>,
+}
+
+pub fn calendar_status(p: &Pipeline) -> Result<CalendarStatus> {
+    Ok(CalendarStatus {
+        access: crate::adapters::calendar::access(),
+        calendars: crate::adapters::calendar::calendars(),
+        excluded: Settings::load(&p.store)?.calendar_excluded,
+    })
+}
+
+/// Asks macOS for Calendar access; on a yes, reads 90 days of meetings and rebuilds.
+pub fn connect_calendar(p: &Pipeline) -> Result<CalendarStatus> {
+    let access = crate::adapters::calendar::request_access();
+    if access == crate::adapters::calendar::Access::Granted {
+        reimport_meetings(p)?;
+    }
+    calendar_status(p)
+}
+
+/// Reads 90 days of meetings again, for example after the excluded calendars change.
+/// Meetings from a newly excluded calendar stay until the user hides them.
+pub fn reimport_meetings(p: &Pipeline) -> Result<usize> {
+    let since = Utc::now() - Duration::days(90);
+    let n = crate::backfill::import_meetings(p, since)?;
+    p.rebuild_range(since, Utc::now())?;
+    Ok(n)
+}

@@ -59,7 +59,8 @@ fn write_loop(pipeline: Pipeline, rx: Receiver<WorkEvent>) {
     }
 }
 
-/// Once a minute: reads new agent log lines and new commits, then rebuilds today.
+/// Once a minute: reads new agent log lines, new commits and meetings that just ended,
+/// then rebuilds today.
 fn poll_loop(pipeline: Pipeline) {
     let mut tail = AgentTail::default();
     loop {
@@ -87,6 +88,7 @@ fn poll_once(pipeline: &Pipeline, tail: &mut AgentTail, since: chrono::DateTime<
             }
         }
     }
+    crate::backfill::import_meetings(pipeline, since)?;
     let today = Local::now().date_naive();
     pipeline.rebuild_day(today)?;
     Ok(())

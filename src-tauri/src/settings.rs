@@ -31,6 +31,8 @@ pub struct Settings {
     pub schedule_asked: bool,
     /// Which projects are work and which are personal.
     pub contexts: ContextRules,
+    /// Calendar names whose events never become meetings, such as "Birthdays".
+    pub calendar_excluded: Vec<String>,
 }
 
 /// The user's regular hours. One range for every work day, with breaks.
@@ -110,11 +112,13 @@ pub struct SourceToggles {
     pub git: bool,
     pub agents: bool,
     pub shell: bool,
+    /// Meetings from the macOS Calendar app. Reads nothing until macOS grants access.
+    pub calendar: bool,
 }
 
 impl Default for SourceToggles {
     fn default() -> Self {
-        Self { app: true, window_titles: false, fs: true, git: true, agents: true, shell: true }
+        Self { app: true, window_titles: false, fs: true, git: true, agents: true, shell: true, calendar: true }
     }
 }
 
@@ -132,6 +136,7 @@ impl Default for Settings {
             schedule: None,
             schedule_asked: false,
             contexts: ContextRules::default(),
+            calendar_excluded: Vec::new(),
         }
     }
 }
@@ -163,6 +168,7 @@ impl Settings {
             "git" => self.sources.git,
             "claude_code" | "codex" => self.sources.agents,
             "shell" => self.sources.shell,
+            "calendar" => self.sources.calendar,
             _ => true,
         }
     }

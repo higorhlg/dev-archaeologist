@@ -96,6 +96,18 @@ pub fn idle_intervals(events: &[&WorkEvent]) -> Vec<Interval> {
     union(out)
 }
 
+/// A meeting keeps the user present for its whole length, even with no keyboard input.
+fn meeting_intervals(events: &[&WorkEvent]) -> Vec<Interval> {
+    events
+        .iter()
+        .filter(|e| e.kind == kind::MEETING)
+        .map(|e| {
+            let s = e.ts.timestamp_millis();
+            (s, s + e.meta_i64("dur_ms").unwrap_or(0))
+        })
+        .collect()
+}
+
 pub fn user_intervals(events: &[&WorkEvent]) -> Vec<Interval> {
     let raw = events
         .iter()
@@ -105,7 +117,8 @@ pub fn user_intervals(events: &[&WorkEvent]) -> Vec<Interval> {
             (s, s + PRESENCE_MS)
         })
         .collect();
-    minus(&union(raw), &idle_intervals(events))
+    let typed = minus(&union(raw), &idle_intervals(events));
+    union(typed.into_iter().chain(meeting_intervals(events)).collect())
 }
 
 /// Active minutes count each minute once, whether the user, an agent, or both worked in it.

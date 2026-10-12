@@ -5,6 +5,20 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.7.0] - 2026-10-12
+
+### Added
+- Calendar meetings from the macOS Calendar app through EventKit, so any account already
+  in Calendar works without a sign-in. A meeting is a timed, busy, not-declined event
+  with two or more attendees or a video link; it is read once it has ended.
+- Each meeting is its own session for its full length, even with no keyboard input, so
+  it covers the gap it explains. Back-to-back meetings stay apart.
+- Accounts with a work email (or its domain) go to the "Meetings" project, which is
+  work; other accounts go to "Personal events".
+- Jira keys in meeting titles feed ticket detection.
+- Sources › Calendar: grant access, include or exclude each calendar, and read the last
+  90 days again. History import includes 90 days of meetings.
+
 ## [0.6.0] - 2026-10-12
 
 ### Added

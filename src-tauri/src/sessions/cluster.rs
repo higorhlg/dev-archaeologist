@@ -10,6 +10,7 @@ pub const IDLE_GAP_MS: i64 = 15 * 60 * 1000;
 pub const SWITCH_MIN_MS: i64 = 5 * 60 * 1000;
 
 /// Groups one day of events into sessions with fixed rules. No AI call happens here.
+/// Each meeting is a session of its own, so back-to-back meetings stay apart.
 /// Each project is grouped on its own, so sessions on two projects can overlap when
 /// agents work in parallel. Events with no project join the session they fall inside.
 /// @param events one local day of events, any order.
@@ -18,7 +19,12 @@ pub fn cluster_sessions(day: &str, events: &[WorkEvent]) -> Vec<Session> {
     sorted.sort_by_key(|e| e.ts);
     let mut by_project: HashMap<&str, Vec<&WorkEvent>> = HashMap::new();
     let mut neutral = Vec::new();
+    let mut meetings: Vec<Vec<&WorkEvent>> = Vec::new();
     for e in sorted {
+        if e.kind == kind::MEETING {
+            meetings.push(vec![e]);
+            continue;
+        }
         match e.project.as_deref() {
             Some(p) => by_project.entry(p).or_default().push(e),
             None => neutral.push(e),
@@ -26,6 +32,7 @@ pub fn cluster_sessions(day: &str, events: &[WorkEvent]) -> Vec<Session> {
     }
     let mut runs: Vec<Vec<&WorkEvent>> = by_project.into_values().flat_map(|evs| split_by_gap(&evs)).collect();
     runs = absorb_short_visits(runs);
+    runs.extend(meetings);
     let orphans = attach_neutral(&mut runs, neutral);
     runs.extend(split_by_gap(&orphans));
     let mut sessions: Vec<Session> = runs
@@ -42,7 +49,7 @@ pub fn cluster_sessions(day: &str, events: &[WorkEvent]) -> Vec<Session> {
 
 fn event_end(e: &WorkEvent) -> i64 {
     let s = e.ts.timestamp_millis();
-    if e.kind == kind::AGENT_TURN {
+    if e.kind == kind::AGENT_TURN || e.kind == kind::MEETING {
         s + e.meta_i64("dur_ms").unwrap_or(0)
     } else {
         s
@@ -70,7 +77,7 @@ fn bounds(run: &[&WorkEvent]) -> (i64, i64) {
 }
 
 fn has_strong_evidence(run: &[&WorkEvent]) -> bool {
-    run.iter().any(|e| e.kind == kind::PROMPT || e.kind == kind::COMMIT)
+    run.iter().any(|e| matches!(e.kind.as_str(), kind::PROMPT | kind::COMMIT | kind::MEETING))
 }
 
 /// The run whose time span, widened by `slack`, holds `t`, picking the closest start.
@@ -150,12 +157,12 @@ fn build_session(day: &str, run: &[&WorkEvent]) -> Session {
     }
 }
 
-/// A label taken straight from the evidence: an agent session title, else the last commit
-/// subject, else the first prompt.
+/// A label taken straight from the evidence: a meeting title, an agent session title, the
+/// last commit subject, or the first prompt, in that order.
 fn observed_label(run: &[&WorkEvent]) -> Option<String> {
     run.iter()
-        .rev()
-        .find(|e| e.kind == kind::AI_TITLE)
+        .find(|e| e.kind == kind::MEETING)
+        .or_else(|| run.iter().rev().find(|e| e.kind == kind::AI_TITLE))
         .or_else(|| run.iter().rev().find(|e| e.kind == kind::COMMIT))
         .map(|e| e.detail.clone())
         .or_else(|| run.iter().find(|e| e.kind == kind::PROMPT).map(|e| e.detail.as_deref().map(first_line)))
@@ -171,6 +178,7 @@ fn first_line(text: &str) -> String {
 
 pub fn evidence_counts(run: &[&WorkEvent]) -> Vec<(String, usize)> {
     let (mut commits, mut tests_ok, mut tests_bad, mut files, mut shell) = (0, 0, 0, 0, 0);
+    let meetings = run.iter().filter(|e| e.kind == kind::MEETING).count();
     for e in run {
         match e.kind.as_str() {
             kind::COMMIT => commits += 1,
@@ -189,6 +197,7 @@ pub fn evidence_counts(run: &[&WorkEvent]) -> Vec<(String, usize)> {
         }
     }
     for (label, n) in [
+        ("meetings", meetings),
         ("test runs passed", tests_ok),
         ("test runs failed", tests_bad),
         ("commits", commits),
@@ -207,7 +216,7 @@ fn evidence_summary(run: &[&WorkEvent]) -> String {
 }
 
 fn confidence(run: &[&WorkEvent], has_project: bool) -> &'static str {
-    let strong = run.iter().any(|e| e.kind == kind::COMMIT || e.kind == kind::PROMPT);
+    let strong = has_strong_evidence(run);
     match (has_project, strong) {
         (true, true) => "high",
         (true, false) => "medium",

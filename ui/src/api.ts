@@ -97,7 +97,7 @@ export type WorkSchedule = {
 };
 
 export type Settings = {
-  sources: { app: boolean; window_titles: boolean; fs: boolean; git: boolean; agents: boolean; shell: boolean };
+  sources: { app: boolean; window_titles: boolean; fs: boolean; git: boolean; agents: boolean; shell: boolean; calendar: boolean };
   repo_roots: string[];
   excluded_paths: string[];
   cloud_opt_out: string[];
@@ -108,6 +108,7 @@ export type Settings = {
   schedule: WorkSchedule | null;
   schedule_asked: boolean;
   contexts: ContextRules;
+  calendar_excluded: string[];
 };
 
 export type Status = {
@@ -155,6 +156,11 @@ export type Report = {
   parallel_min: number;
 };
 export type ModelInfo = { id: string; display_name: string; note: string };
+export type CalendarStatus = {
+  access: "not_asked" | "granted" | "denied" | "unsupported";
+  calendars: { title: string; account: string }[];
+  excluded: string[];
+};
 export type TogglAccount = { email: string; workspace_id: number };
 export type TogglProjectInfo = { id: number; name: string; active: boolean };
 export type SendResult = { sent: number; already_sent: number; failed: string[] };
@@ -207,6 +213,9 @@ export const api = {
   saveSchedule: (schedule: WorkSchedule | null) => invoke<void>("save_schedule", { schedule }),
   projectContexts: () => invoke<ProjectContext[]>("project_contexts"),
   setProjectContext: (project: string, context: Context | null) => invoke<void>("set_project_context", { project, context }),
+  calendarStatus: () => invoke<CalendarStatus>("calendar_status"),
+  connectCalendar: () => invoke<CalendarStatus>("connect_calendar"),
+  reimportMeetings: () => invoke<number>("reimport_meetings"),
   aiModels: () => invoke<ModelInfo[]>("ai_models"),
   daysNeedingLabels: (query: ReportQuery) => invoke<string[]>("days_needing_labels", { query }),
 };

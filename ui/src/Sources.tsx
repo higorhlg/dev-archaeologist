@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Context, type ContextRules, type ModelInfo, type ProjectContext, type Settings, type Status } from "./api";
+import { api, type CalendarStatus, type Context, type ContextRules, type ModelInfo, type ProjectContext, type Settings, type Status } from "./api";
 import ScheduleStep from "./ScheduleStep";
 
 type Toggle = { key: keyof Settings["sources"]; label: string; note: string; disabled?: boolean };
@@ -11,6 +11,7 @@ const TOGGLES: Toggle[] = [
   { key: "git", label: "Git", note: "Your commits on every branch, read from local .git folders." },
   { key: "agents", label: "Claude Code and Codex", note: "Your prompts, tool names and test results from local session logs." },
   { key: "shell", label: "Terminal", note: "Command name, exit code and folder from the zsh hook. Never the arguments." },
+  { key: "calendar", label: "Calendar meetings", note: "Meetings from the macOS Calendar app, after they end. Set up below." },
 ];
 
 const lines = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -101,6 +102,8 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
         <h2>Work hours</h2>
         <ScheduleStep compact initial={status.settings.schedule} projects={Object.keys(status.settings.toggl.project_map)} onDone={onSaved} />
       </section>
+
+      <Calendar onSaved={onSaved} />
 
       <WorkAndPersonal rules={status.settings.contexts} onSaved={onSaved} />
 
@@ -265,6 +268,88 @@ function WorkAndPersonal({ rules, onSaved }: { rules: ContextRules; onSaved: () 
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+/** Calendar access, and which calendars count. Meetings come from accounts already in
+ * the macOS Calendar app, so there is no sign-in here. */
+function Calendar({ onSaved }: { onSaved: () => void }) {
+  const [status, setStatus] = useState<CalendarStatus | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.calendarStatus().then(setStatus);
+  }, []);
+
+  const connect = async () => {
+    setBusy("Waiting for macOS…");
+    const s = await api.connectCalendar();
+    setStatus(s);
+    setBusy(null);
+    setNote(s.access === "granted" ? "Connected. Meetings from the last 90 days are in your timeline." : null);
+    onSaved();
+  };
+  const toggle = async (title: string, include: boolean) => {
+    if (!status) return;
+    const excluded = include ? status.excluded.filter((t) => t !== title) : [...status.excluded, title];
+    await api.patchSettings({ calendar_excluded: excluded });
+    setStatus({ ...status, excluded });
+  };
+  const reimport = async () => {
+    setBusy("Reading meetings…");
+    const n = await api.reimportMeetings();
+    setBusy(null);
+    setNote(`Read the last 90 days again. ${n} new meetings.`);
+    onSaved();
+  };
+
+  const byAccount = new Map<string, string[]>();
+  for (const c of status?.calendars ?? []) byAccount.set(c.account, [...(byAccount.get(c.account) ?? []), c.title]);
+
+  return (
+    <section>
+      <h2>Calendar</h2>
+      <p className="muted">
+        A meeting is a timed, busy event you did not decline, with other people or a video link. Each one becomes a session
+        that covers its gap. Accounts with a work email are work; others are personal.
+      </p>
+      {status?.access === "unsupported" && <p className="muted">Calendar reading needs macOS.</p>}
+      {status?.access === "not_asked" && (
+        <div className="actions">
+          <button className="primary" disabled={!!busy} onClick={connect}>{busy ?? "Allow calendar access"}</button>
+        </div>
+      )}
+      {status?.access === "denied" && (
+        <p className="error">
+          macOS denied Calendar access. Turn on Dev Archaeologist in System Settings › Privacy &amp; Security › Calendars,
+          then open this screen again.
+        </p>
+      )}
+      {status?.access === "granted" && (
+        <>
+          {[...byAccount.entries()].map(([account, titles]) => (
+            <div key={account} className="cal-account">
+              <b>{account || "On this Mac"}</b>
+              <ul className="toggles compact">
+                {titles.map((t) => (
+                  <li key={t}>
+                    <label>
+                      <input type="checkbox" role="switch" checked={!status.excluded.includes(t)} onChange={(e) => toggle(t, e.target.checked)} />
+                      <span>{t}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          <div className="actions">
+            <button disabled={!!busy} onClick={reimport}>{busy ?? "Read meetings again"}</button>
+            {note && <span className="muted">{note}</span>}
+          </div>
+        </>
+      )}
     </section>
   );
 }
