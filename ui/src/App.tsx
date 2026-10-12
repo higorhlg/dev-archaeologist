@@ -5,13 +5,15 @@ import Timeline from "./Timeline";
 import Journal from "./Journal";
 import ProjectTimeline from "./ProjectTimeline";
 import Sources from "./Sources";
+import Reports from "./Reports";
 
-type View = "day" | "journal" | "projects" | "sources";
+type View = "day" | "journal" | "projects" | "reports" | "sources";
 
 const NAV: { id: View; label: string }[] = [
   { id: "day", label: "Day" },
   { id: "journal", label: "Journal" },
   { id: "projects", label: "Projects" },
+  { id: "reports", label: "Reports" },
   { id: "sources", label: "Sources" },
 ];
 
@@ -56,6 +58,17 @@ export default function App() {
               setDay(d);
               setView("day");
             }}
+          />
+        )}
+        {view === "reports" && (
+          <Reports
+            status={status}
+            onSaved={refresh}
+            onOpenDay={(d) => {
+              setDay(d);
+              setView("day");
+            }}
+            goToSources={() => setView("sources")}
           />
         )}
         {view === "sources" && <Sources status={status} onSaved={refresh} />}

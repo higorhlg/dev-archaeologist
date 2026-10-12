@@ -5,6 +5,27 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.2.0] - 2026-10-12
+
+### Added
+- Reports view: this/last week or month, entries per ticket, per session or per project,
+  review flags, one-click approval of confident sessions, and inline edits of
+  descriptions and tickets.
+- Ticket finder: Jira keys trusted only once seen in a branch or commit scope, GitHub
+  issues and PRs from branches, squash refs and links. Tickets go in the description,
+  as a Toggl tag, or nowhere. The last applied report options are saved.
+- "Label with AI" writes journals for days in the range that still lack AI labels.
+- Toggl: CSV export of approved entries to ~/Downloads, project mapping (Toggl project,
+  client, billable, never send), and a confirmed send through the API v9 that records
+  each entry so it is never sent twice. Token in the macOS Keychain.
+
+### Fixed
+- AI session labels survive the per-minute rebuild of today's sessions.
+- An agent turn ends at a pause longer than 15 minutes and counts at most 3 hours.
+- Agent tool calls and test runs count as agent activity in their own project.
+- Report minutes share overlapping parallel sessions, so a day adds up to its
+  wall-clock active time.
+
 ## [0.1.0] - 2026-10-12
 
 ### Added

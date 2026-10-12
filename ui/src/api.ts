@@ -42,6 +42,17 @@ export type WorkEvent = {
   meta: Record<string, unknown> | null;
 };
 
+export type Grouping = "session" | "ticket_day" | "project_day";
+export type TicketMode = "prefix" | "tag" | "off";
+export type ReportPrefs = { range: string; grouping: Grouping; tickets: TicketMode };
+export type TogglProject = { name: string; id: number | null; client: string; billable: boolean; skip: boolean };
+export type TogglSettings = {
+  email: string;
+  workspace_id: number | null;
+  default_billable: boolean;
+  project_map: Record<string, TogglProject>;
+};
+
 export type Settings = {
   sources: { app: boolean; window_titles: boolean; fs: boolean; git: boolean; agents: boolean; shell: boolean };
   repo_roots: string[];
@@ -49,9 +60,54 @@ export type Settings = {
   cloud_opt_out: string[];
   model: string;
   backfill_done: boolean;
+  toggl: TogglSettings;
+  report_prefs: ReportPrefs;
 };
 
-export type Status = { event_counts: [string, number][]; days: string[]; has_api_key: boolean; settings: Settings };
+export type Status = {
+  event_counts: [string, number][];
+  days: string[];
+  has_api_key: boolean;
+  has_toggl_token: boolean;
+  settings: Settings;
+};
+
+export type Ticket = { key: string; source: string };
+export type ReportQuery = { from: string; to: string; grouping: Grouping; tickets: TicketMode };
+export type ReportEntry = {
+  key: string;
+  day: string;
+  start_ts: number;
+  duration_min: number;
+  project: string | null;
+  toggl_project: string;
+  client: string;
+  billable: boolean;
+  skip: boolean;
+  label: string;
+  description: string;
+  tags: string[];
+  ticket: Ticket | null;
+  session_ids: string[];
+  approved: boolean;
+  reasons: string[];
+  sent: boolean;
+  parallel_min: number;
+};
+export type Report = {
+  query: ReportQuery;
+  entries: ReportEntry[];
+  total_min: number;
+  approved_min: number;
+  billable_min: number;
+  review_count: number;
+  by_project: { project: string; min: number }[];
+  known_prefixes: string[];
+  parallel_min: number;
+};
+export type TogglAccount = { email: string; workspace_id: number };
+export type TogglProjectInfo = { id: number; name: string; active: boolean };
+export type SendResult = { sent: number; already_sent: number; failed: string[] };
 
 export type Discovery = {
   claude_profiles: number;
@@ -81,6 +137,16 @@ export const api = {
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
   saveApiKey: (key: string) => invoke<void>("save_api_key", { key }),
   installShellHook: () => invoke<string>("install_shell_hook"),
+  report: (query: ReportQuery) => invoke<Report>("report", { query }),
+  approveSessions: (ids: string[]) => invoke<void>("approve_sessions", { ids }),
+  approveConfident: (query: ReportQuery) => invoke<number>("approve_confident", { query }),
+  setEntryLabel: (sessionId: string, label: string) => invoke<void>("set_entry_label", { sessionId, label }),
+  setTicket: (sessionIds: string[], ticket: string | null) => invoke<void>("set_ticket", { sessionIds, ticket }),
+  exportTogglCsv: (query: ReportQuery) => invoke<string>("export_toggl_csv", { query }),
+  connectToggl: (token: string) => invoke<TogglAccount>("connect_toggl", { token }),
+  togglProjects: () => invoke<TogglProjectInfo[]>("toggl_projects"),
+  sendToToggl: (query: ReportQuery) => invoke<SendResult>("send_to_toggl", { query }),
+  daysNeedingLabels: (query: ReportQuery) => invoke<string[]>("days_needing_labels", { query }),
 };
 
 /** Local calendar day as `YYYY-MM-DD`. */

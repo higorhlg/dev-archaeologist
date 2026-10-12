@@ -285,3 +285,16 @@ pub fn send_to_toggl(p: &Pipeline, q: &ReportQuery) -> Result<toggl::SendResult>
 pub fn has_toggl_token() -> bool {
     toggl::token().is_some()
 }
+
+/// Days in the range with sessions that still carry only evidence labels (no AI label yet).
+pub fn days_needing_labels(p: &Pipeline, q: &ReportQuery) -> Result<Vec<String>> {
+    let mut days: Vec<String> = p
+        .store
+        .sessions_between_days(&q.from, &q.to)?
+        .into_iter()
+        .filter(|s| s.state == "observed")
+        .map(|s| s.day)
+        .collect();
+    days.dedup();
+    Ok(days)
+}

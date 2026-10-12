@@ -21,12 +21,27 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
   const [optOut, setOptOut] = useState(s.cloud_opt_out.join("\n"));
   const [key, setKey] = useState("");
   const [hookLine, setHookLine] = useState<string | null>(null);
+  const [togglToken, setTogglToken] = useState("");
+  const [togglError, setTogglError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
   const save = async () => {
     await api.saveSettings({ ...s, repo_roots: lines(roots), excluded_paths: lines(excluded), cloud_opt_out: lines(optOut) });
     setSaved("Settings saved. Collector changes apply the next time the app opens.");
     onSaved();
+  };
+
+  const connectToggl = async () => {
+    setTogglError(null);
+    try {
+      const account = await api.connectToggl(togglToken);
+      setTogglToken("");
+      setS({ ...s, toggl: { ...s.toggl, workspace_id: account.workspace_id, email: s.toggl.email || account.email } });
+      setSaved(`Connected to Toggl as ${account.email}. The token is in your Keychain.`);
+      onSaved();
+    } catch (e) {
+      setTogglError(String(e));
+    }
   };
 
   const saveKey = async () => {
@@ -107,6 +122,30 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
             <button disabled={!key.trim()} onClick={saveKey}>Save key</button>
           </span>
         </label>
+      </section>
+
+      <section>
+        <h2>Toggl</h2>
+        <p className="muted">
+          Reports export approved entries as a Toggl CSV. With a token, they can also go straight to your workspace. The
+          token is on your Toggl profile page.
+        </p>
+        <label className="area">
+          Email for CSV imports
+          <input value={s.toggl.email} placeholder="you@company.com" onChange={(e) => setS({ ...s, toggl: { ...s.toggl, email: e.target.value } })} />
+        </label>
+        <label className="check-line">
+          <input type="checkbox" checked={s.toggl.default_billable} onChange={(e) => setS({ ...s, toggl: { ...s.toggl, default_billable: e.target.checked } })} />
+          New projects are billable
+        </label>
+        <label className="area">
+          Toggl API token {status.has_toggl_token && <span className="tag ok">Connected</span>}
+          <span className="inline">
+            <input type="password" autoComplete="off" value={togglToken} placeholder={status.has_toggl_token ? "Replace the saved token" : "Paste your API token"} onChange={(e) => setTogglToken(e.target.value)} />
+            <button disabled={!togglToken.trim()} onClick={connectToggl}>Connect</button>
+          </span>
+        </label>
+        {togglError && <p className="error">{togglError}</p>}
       </section>
 
       <footer className="save">
