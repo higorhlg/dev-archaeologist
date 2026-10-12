@@ -24,6 +24,39 @@ pub struct Settings {
     pub toggl: TogglSettings,
     /// The report options the user applied last, restored the next time Reports opens.
     pub report_prefs: ReportPrefs,
+    /// `None` when the user skipped the step; then no gap is ever filled.
+    pub schedule: Option<WorkSchedule>,
+    /// Onboarding asked about work hours, whether or not the user gave them.
+    pub schedule_asked: bool,
+}
+
+/// The user's regular hours. One range for every work day, with breaks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkSchedule {
+    /// 0 = Monday … 6 = Sunday.
+    pub days: Vec<u32>,
+    /// Local time, `HH:MM`.
+    pub start: String,
+    pub end: String,
+    pub breaks: Vec<[String; 2]>,
+    /// The longest idle gap between two sessions that the app bridges.
+    pub bridge_max_min: i64,
+    /// The project "Fill to schedule" offers first. It never applies on its own.
+    pub fill_project: Option<String>,
+}
+
+impl Default for WorkSchedule {
+    fn default() -> Self {
+        Self {
+            days: vec![0, 1, 2, 3, 4],
+            start: "08:00".into(),
+            end: "17:00".into(),
+            breaks: vec![["12:00".into(), "13:00".into()]],
+            bridge_max_min: 60,
+            fill_project: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +125,8 @@ impl Default for Settings {
             backfill_done: false,
             toggl: TogglSettings::default(),
             report_prefs: ReportPrefs::default(),
+            schedule: None,
+            schedule_asked: false,
         }
     }
 }

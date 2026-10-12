@@ -22,9 +22,33 @@ export type Achievement = { id: string; day: string; rule: string; title: string
 export type JournalLine = { text: string; cites: string[] };
 export type Journal = { day: string; lines: JournalLine[]; state: "inferred" | "confirmed"; model: string | null };
 
+export type Gap = {
+  id: string;
+  day: string;
+  start_ts: number;
+  end_ts: number;
+  kind: "at_computer" | "bridged" | "unaccounted";
+  state: "open" | "approved" | "assigned" | "not_work";
+  targets: [string, number][];
+  project: string | null;
+  label: string | null;
+};
+
+export type DaySchedule = {
+  day: string;
+  schedule_min: number;
+  observed_min: number;
+  filled_min: number;
+  pending_bridge_min: number;
+  unaccounted_min: number;
+};
+
 export type DayView = {
   day: string;
   active_min: number;
+  gaps: Gap[];
+  schedule: DaySchedule | null;
+  work_windows: [number, number][];
   sessions: Session[];
   achievements: Achievement[];
   journal: Journal | null;
@@ -53,6 +77,15 @@ export type TogglSettings = {
   project_map: Record<string, TogglProject>;
 };
 
+export type WorkSchedule = {
+  days: number[];
+  start: string;
+  end: string;
+  breaks: [string, string][];
+  bridge_max_min: number;
+  fill_project: string | null;
+};
+
 export type Settings = {
   sources: { app: boolean; window_titles: boolean; fs: boolean; git: boolean; agents: boolean; shell: boolean };
   repo_roots: string[];
@@ -62,6 +95,8 @@ export type Settings = {
   backfill_done: boolean;
   toggl: TogglSettings;
   report_prefs: ReportPrefs;
+  schedule: WorkSchedule | null;
+  schedule_asked: boolean;
 };
 
 export type Status = {
@@ -93,6 +128,8 @@ export type ReportEntry = {
   reasons: string[];
   sent: boolean;
   parallel_min: number;
+  gap_min: number;
+  pending_bridge_min: number;
 };
 export type Report = {
   query: ReportQuery;
@@ -147,6 +184,12 @@ export const api = {
   connectToggl: (token: string) => invoke<TogglAccount>("connect_toggl", { token }),
   togglProjects: () => invoke<TogglProjectInfo[]>("toggl_projects"),
   sendToToggl: (query: ReportQuery) => invoke<SendResult>("send_to_toggl", { query }),
+  reportDays: (query: ReportQuery) => invoke<DaySchedule[]>("report_days", { query }),
+  resolveGap: (id: string, resolution: { project?: string; label?: string; not_work?: boolean }) =>
+    invoke<void>("resolve_gap", { id, resolution }),
+  approveBridges: (from: string, to: string) => invoke<number>("approve_bridges", { from, to }),
+  fillToSchedule: (day: string, project: string) => invoke<number>("fill_to_schedule", { day, project }),
+  saveSchedule: (schedule: WorkSchedule | null) => invoke<void>("save_schedule", { schedule }),
   aiModels: () => invoke<ModelInfo[]>("ai_models"),
   daysNeedingLabels: (query: ReportQuery) => invoke<string[]>("days_needing_labels", { query }),
 };
@@ -187,3 +230,12 @@ export function stratum(project: string | null): string {
   for (const c of project) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return STRATA[h % STRATA.length];
 }
+
+export const DEFAULT_SCHEDULE: WorkSchedule = {
+  days: [0, 1, 2, 3, 4],
+  start: "08:00",
+  end: "17:00",
+  breaks: [["12:00", "13:00"]],
+  bridge_max_min: 60,
+  fill_project: null,
+};

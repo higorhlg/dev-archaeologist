@@ -258,3 +258,32 @@ input[role="switch"]:checked::after { left: 16px; }
 .mapping td { padding: 4px 6px; border-top: 1px solid var(--rule-soft); }
 .mapping td input:not([type="checkbox"]) { width: 100%; border: 1px solid var(--rule); border-radius: 6px; padding: 4px 7px; background: var(--paper); }
 .check-line { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+
+/* ---------- schedule and gaps ---------- */
+.work-hours { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--ok) 6%, transparent); }
+.band.fill { background: repeating-linear-gradient(135deg, currentColor 0 4px, transparent 4px 8px); opacity: 0.55; pointer-events: auto; }
+.band.fill.at_computer, .band.fill.approved { opacity: 0.8; }
+.band.gap { background: none; border: 1.5px dashed var(--low); top: 5px; height: 16px; cursor: pointer; }
+.band.gap.on { background: var(--low-wash); }
+.lane-name.warn, .warn { color: var(--low); }
+.gap-panel { background: var(--surface); border: 1px solid var(--low); border-radius: 10px; padding: 12px 14px; margin: -8px 0 18px; display: grid; gap: 10px; }
+.gap-panel .opts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.gap-panel .opts button i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.gap-panel .other { display: inline-flex; gap: 4px; }
+.gap-panel .other input { border: 1px solid var(--rule); border-radius: 7px; padding: 5px 8px; background: var(--paper); width: 190px; }
+.schedule { display: grid; gap: 10px; }
+.schedule h2 { font-size: 15px; }
+.sched-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; border-top: 1px solid var(--rule-soft); }
+.sched-row input[type="time"], .sched-row input[type="number"], .sched-row input:not([type]) { border: 1px solid var(--rule); border-radius: 6px; padding: 3px 6px; background: var(--paper); font-variant-numeric: tabular-nums; }
+.sched-row input[type="number"] { width: 64px; }
+.days { display: flex; gap: 4px; }
+.days button { width: 28px; height: 28px; padding: 0; }
+.days button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.day-schedule { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 6px; }
+.day-schedule .bar { display: flex; width: 160px; height: 8px; border-radius: 2px; overflow: hidden; gap: 1px; background: var(--rule-soft); }
+.day-schedule .bar i { display: block; }
+.day-schedule .bar .o { background: var(--ink-2); }
+.day-schedule .bar .f { background: repeating-linear-gradient(135deg, var(--ink-2) 0 3px, transparent 3px 6px); }
+.day-schedule .bar .u { background: var(--low-wash); border: 1px dashed var(--low); }
+.fill-picker { display: inline-flex; gap: 4px; align-items: center; }
+.fill-picker input { border: 1px solid var(--rule); border-radius: 6px; padding: 3px 6px; background: var(--paper); width: 170px; }

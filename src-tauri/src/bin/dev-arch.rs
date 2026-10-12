@@ -5,6 +5,10 @@
 //!   dev-arch day [YYYY-MM-DD]    print one day's sessions and achievements
 //!   dev-arch journal YYYY-MM-DD  write the day's journal with the Claude API
 //!   dev-arch report FROM TO [session|ticket_day|project_day]
+//!   dev-arch schedule [HH:MM HH:MM | off]  set Mon–Fri hours with lunch 12–13
+//!   dev-arch gaps [YYYY-MM-DD]   print the day's gaps inside work hours
+//!   dev-arch fill DAY PROJECT     assign a day's unaccounted blocks to one project
+//!   dev-arch approve-bridges DAY approve a day's bridged gaps
 //!   dev-arch daemon              run the live collectors in the foreground
 //!   dev-arch set-key             read an API key from stdin into the Keychain
 //!   dev-arch hook                install the zsh hook file and print the source line
@@ -85,6 +89,38 @@ fn main() -> Result<()> {
                 let t = e.ticket.as_ref().map(|t| format!("{} ({})", t.key, t.source)).unwrap_or_else(|| "-".into());
                 println!("  {} {:>4}m  {:<22} {:<28} {}", e.day, e.duration_min, e.toggl_project, t, devarch::event::clip(&e.label, 70));
             }
+        }
+        Some("schedule") => {
+            let schedule = match args.get(2).map(String::as_str) {
+                Some("off") => None,
+                _ => Some(devarch::settings::WorkSchedule {
+                    start: args.get(2).cloned().unwrap_or_else(|| "08:00".into()),
+                    end: args.get(3).cloned().unwrap_or_else(|| "17:00".into()),
+                    ..Default::default()
+                }),
+            };
+            api::save_schedule(&p, schedule)?;
+            println!("schedule saved; gaps rebuilt for 90 days");
+        }
+        Some("gaps") => {
+            let day = arg_day(&args);
+            let v = api::day_view(&p, &day)?;
+            if let Some(s) = &v.schedule {
+                println!("{day}: schedule {} · observed {} · filled {} · bridge pending {} · unaccounted {}", s.schedule_min, s.observed_min, s.filled_min, s.pending_bridge_min, s.unaccounted_min);
+            }
+            for g in &v.gaps {
+                let at = |ms: i64| chrono::DateTime::from_timestamp_millis(ms).unwrap().with_timezone(&Local).format("%H:%M").to_string();
+                println!("  {}–{}  {:>3} min  {:<12} {:<9} → {:?}", at(g.start_ts), at(g.end_ts), g.minutes(), g.kind, g.state, g.targets.iter().map(|t| t.1).collect::<Vec<_>>());
+            }
+        }
+        Some("fill") => {
+            let day = arg_day(&args);
+            let project = args.get(3).cloned().unwrap_or_else(|| "Meetings".into());
+            println!("filled {} min", api::fill_to_schedule(&p, &day, &project)?);
+        }
+        Some("approve-bridges") => {
+            let day = arg_day(&args);
+            println!("approved {} bridges", api::approve_bridges(&p, &day, &day)?);
         }
         Some("status") => {
             let s = api::status(&p)?;

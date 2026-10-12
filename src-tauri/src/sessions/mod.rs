@@ -1,5 +1,6 @@
 pub mod attribute;
 pub mod cluster;
+pub mod gaps;
 
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +26,17 @@ pub struct Session {
 }
 
 impl Session {
+    /// A session the user made from an unaccounted block. Its id starts with `m`.
+    pub fn is_manual(&self) -> bool {
+        self.id.starts_with('m')
+    }
+
+    /// The user set this session's minutes: an edit or a block they assigned.
+    /// Its minutes count as given and never share with parallel sessions.
+    pub fn has_user_minutes(&self) -> bool {
+        self.state == "edited" || self.is_manual()
+    }
+
     pub fn is_user_touched(&self) -> bool {
         matches!(self.state.as_str(), "edited" | "confirmed" | "excluded")
     }

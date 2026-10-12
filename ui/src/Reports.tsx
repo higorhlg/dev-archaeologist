@@ -7,6 +7,7 @@ import {
   minutes,
   shiftDay,
   stratum,
+  type DaySchedule,
   type Grouping,
   type Report,
   type ReportEntry,
@@ -59,6 +60,7 @@ export default function Reports({ status, onSaved, onOpenDay, goToSources }: Pro
   const [prefs, setPrefs] = useState<ReportPrefs>(status.settings.report_prefs);
   const [report, setReport] = useState<Report | null>(null);
   const [unlabelled, setUnlabelled] = useState<string[]>([]);
+  const [schedule, setSchedule] = useState<DaySchedule[]>([]);
   const [labelling, setLabelling] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +76,7 @@ export default function Reports({ status, onSaved, onOpenDay, goToSources }: Pro
     setError(null);
     api.report(query).then(setReport).catch((e) => setError(String(e)));
     api.daysNeedingLabels(query).then(setUnlabelled);
+    api.reportDays(query).then(setSchedule);
   }, [query]);
   useEffect(load, [load]);
 
@@ -141,6 +144,11 @@ export default function Reports({ status, onSaved, onOpenDay, goToSources }: Pro
           ) : (
             <button onClick={goToSources}>Add an API key to label sessions</button>
           ))}
+        {schedule.some((d) => d.pending_bridge_min > 0) && (
+          <button onClick={() => run(async () => `Approved ${await api.approveBridges(from, to)} bridged gaps.`)}>
+            Approve bridges ({minutes(schedule.reduce((n, d) => n + d.pending_bridge_min, 0))})
+          </button>
+        )}
         <button className="link" onClick={() => setShowMapping(!showMapping)}>
           {showMapping ? "Hide Toggl projects" : "Toggl projects"}
         </button>
@@ -159,6 +167,10 @@ export default function Reports({ status, onSaved, onOpenDay, goToSources }: Pro
             <button className="link" onClick={() => onOpenDay(day)}>{longDay(day)}</button>
             <span className="num">{minutes(entries.filter((e) => !e.skip).reduce((n, e) => n + e.duration_min, 0))}</span>
           </h2>
+          {schedule.find((d) => d.day === day) && (
+            <DayAgainstSchedule d={schedule.find((d) => d.day === day)!} fillDefault={status.settings.schedule?.fill_project ?? null}
+              projects={[...new Set(entries.map((e) => e.project).filter((p): p is string => !!p))]} run={run} />
+          )}
           <ol className="entries">
             {entries.map((e) => (
               <EntryRow key={e.key} e={e} grouping={prefs.grouping} run={run} />
@@ -268,12 +280,13 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
         ) : (
           <span className="desc-text">{e.label}</span>
         )}
-        {(e.reasons.length > 0 || e.parallel_min > 0) && (
+        {(e.reasons.length > 0 || e.parallel_min > 0 || e.gap_min > 0) && (
           <span className="chips">
             {e.reasons.map((r) => (
               <span key={r} className={`tag ${r === "Low confidence" || r === "No project" ? "low" : ""}`}>{r}</span>
             ))}
             {e.parallel_min > 0 && <span className="chip">{minutes(e.parallel_min)} shared with parallel work</span>}
+            {e.gap_min > 0 && <span className="chip">includes {minutes(e.gap_min)} filled</span>}
           </span>
         )}
       </span>
@@ -362,5 +375,41 @@ function MappingPanel({ status, report, onSaved }: { status: Status; report: Rep
       </table>
       <button className="primary" onClick={save}>Save projects</button>
     </section>
+  );
+}
+
+/** One day measured against the schedule, with "Fill to schedule" for open blocks. */
+function DayAgainstSchedule({ d, fillDefault, projects, run }: { d: DaySchedule; fillDefault: string | null; projects: string[]; run: Run }) {
+  const [picking, setPicking] = useState(false);
+  const [project, setProject] = useState(fillDefault ?? projects[0] ?? "");
+  const total = Math.max(1, d.schedule_min, d.observed_min + d.filled_min + d.unaccounted_min);
+  return (
+    <div className="day-schedule">
+      <span className="bar" aria-hidden>
+        <i className="o" style={{ flexGrow: d.observed_min / total }} />
+        <i className="f" style={{ flexGrow: (d.filled_min + d.pending_bridge_min) / total }} />
+        <i className="u" style={{ flexGrow: d.unaccounted_min / total }} />
+      </span>
+      <span>
+        {minutes(d.observed_min)} observed
+        {d.filled_min > 0 && `, ${minutes(d.filled_min)} filled`}
+        {d.pending_bridge_min > 0 && `, ${minutes(d.pending_bridge_min)} bridged to approve`}
+        {d.unaccounted_min > 0 && <>, <span className="warn">{minutes(d.unaccounted_min)} unaccounted</span></>}
+        {` of ${minutes(d.schedule_min)}`}
+      </span>
+      {d.unaccounted_min > 0 &&
+        (picking ? (
+          <span className="fill-picker">
+            <input list="fill-day-projects" value={project} onChange={(e) => setProject(e.target.value)} placeholder="Project" />
+            <datalist id="fill-day-projects">{projects.map((p) => <option key={p} value={p} />)}</datalist>
+            <button className="primary" disabled={!project.trim()} onClick={() => { setPicking(false); run(async () => `Filled ${minutes(await api.fillToSchedule(d.day, project.trim()))} on ${d.day}.`); }}>
+              Fill {minutes(d.unaccounted_min)}
+            </button>
+            <button onClick={() => setPicking(false)}>Cancel</button>
+          </span>
+        ) : (
+          <button onClick={() => setPicking(true)}>Fill to schedule…</button>
+        ))}
+    </div>
   );
 }

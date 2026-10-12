@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type ModelInfo, type Settings, type Status } from "./api";
+import ScheduleStep from "./ScheduleStep";
 
 type Toggle = { key: keyof Settings["sources"]; label: string; note: string; disabled?: boolean };
 
@@ -87,6 +88,11 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
             </p>
           )}
         </div>
+      </section>
+
+      <section>
+        <h2>Work hours</h2>
+        <ScheduleStep compact initial={status.settings.schedule} projects={Object.keys(status.settings.toggl.project_map)} onDone={onSaved} />
       </section>
 
       <section>

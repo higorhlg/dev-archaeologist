@@ -11,7 +11,8 @@ use crate::corrections::Rule;
 use crate::event::WorkEvent;
 use crate::infer::journal;
 use crate::pipeline::Pipeline;
-use crate::sessions::{attribute::attribute, cluster::evidence_counts, Session};
+use crate::sessions::{attribute::attribute, cluster::evidence_counts, gaps::{work_windows, Gap}, Session};
+use crate::settings::WorkSchedule;
 use crate::settings::Settings;
 use crate::reports::{self, Report, ReportQuery};
 use crate::store::{Achievement, Journal};
@@ -30,10 +31,25 @@ pub struct SessionView {
     pub chips: Vec<Chip>,
 }
 
+/// One day measured against the work schedule.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DaySchedule {
+    pub day: String,
+    pub schedule_min: i64,
+    pub observed_min: i64,
+    /// At-computer time and approved bridges.
+    pub filled_min: i64,
+    pub pending_bridge_min: i64,
+    pub unaccounted_min: i64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct DayView {
     pub day: String,
     pub active_min: i64,
+    pub gaps: Vec<Gap>,
+    pub schedule: Option<DaySchedule>,
+    pub work_windows: Vec<(i64, i64)>,
     pub sessions: Vec<SessionView>,
     pub achievements: Vec<Achievement>,
     pub journal: Option<Journal>,
@@ -86,15 +102,30 @@ pub fn run_backfill(p: &Pipeline, days: i64) -> Result<BackfillReport> {
 }
 
 /// Day total: every minute counts once across overlapping sessions. A session whose
-/// minutes the user edited adds its edited value; excluded sessions add nothing.
+/// minutes the user set (an edit or an assigned block) adds them as given; excluded
+/// sessions add nothing.
 fn day_active_min(sessions: &[(Session, Vec<WorkEvent>)]) -> i64 {
     let machine: Vec<&WorkEvent> = sessions
         .iter()
-        .filter(|(s, _)| s.state != "excluded" && s.state != "edited")
+        .filter(|(s, _)| s.state != "excluded" && !s.has_user_minutes())
         .flat_map(|(_, evs)| evs.iter())
         .collect();
-    let edited: i64 = sessions.iter().filter(|(s, _)| s.state == "edited").map(|(s, _)| s.active_min).sum();
+    let edited: i64 =
+        sessions.iter().filter(|(s, _)| s.state != "excluded" && s.has_user_minutes()).map(|(s, _)| s.active_min).sum();
     attribute(&machine).0 + edited
+}
+
+/// Sums one day's minutes by kind. Assigned blocks are sessions, so they sit in `observed`.
+pub fn measure_day(day: &str, windows: &[(i64, i64)], observed_min: i64, gaps: &[Gap]) -> DaySchedule {
+    let sum = |f: &dyn Fn(&&Gap) -> bool| gaps.iter().filter(f).map(|g| g.minutes()).sum::<i64>();
+    DaySchedule {
+        day: day.to_string(),
+        schedule_min: windows.iter().map(|(a, b)| (b - a) / 60_000).sum(),
+        observed_min,
+        filled_min: sum(&|g| g.counts()),
+        pending_bridge_min: sum(&|g| g.kind == "bridged" && g.state == "open"),
+        unaccounted_min: sum(&|g| g.is_open_unaccounted()),
+    }
 }
 
 pub fn day_view(p: &Pipeline, day: &str) -> Result<DayView> {
@@ -112,9 +143,17 @@ pub fn day_view(p: &Pipeline, day: &str) -> Result<DayView> {
             SessionView { session: s, chips }
         })
         .collect();
+    let gaps = p.store.gaps_between_days(day, day)?;
+    let settings = Settings::load(&p.store)?;
+    let date = NaiveDate::parse_from_str(day, "%Y-%m-%d")?;
+    let windows = settings.schedule.as_ref().map(|s| work_windows(date, s)).unwrap_or_default();
+    let schedule = settings.schedule.as_ref().map(|_| measure_day(day, &windows, active, &gaps));
     Ok(DayView {
         day: day.to_string(),
         active_min: active,
+        gaps,
+        schedule,
+        work_windows: windows,
         sessions,
         achievements: p.store.achievements(day)?,
         journal: p.store.journal(day)?,
@@ -222,9 +261,32 @@ pub fn report(p: &Pipeline, q: &ReportQuery) -> Result<Report> {
     reports::build(&p.store, q)
 }
 
-/// Approving an entry confirms every session in it.
+/// The schedule picture for each work day in the range. Empty without a schedule.
+pub fn report_days(p: &Pipeline, q: &ReportQuery) -> Result<Vec<DaySchedule>> {
+    let Some(schedule) = Settings::load(&p.store)?.schedule else { return Ok(vec![]) };
+    let mut day = NaiveDate::parse_from_str(&q.from, "%Y-%m-%d")?;
+    let last = NaiveDate::parse_from_str(&q.to, "%Y-%m-%d")?;
+    let mut out = Vec::new();
+    while day <= last {
+        let key = day.format("%Y-%m-%d").to_string();
+        let windows = work_windows(day, &schedule);
+        if !windows.is_empty() {
+            let observed = day_view(p, &key)?.active_min;
+            out.push(measure_day(&key, &windows, observed, &p.store.gaps_between_days(&key, &key)?));
+        }
+        day = day.succ_opt().unwrap();
+    }
+    Ok(out)
+}
+
+/// Approving an entry confirms every session in it and approves the bridges aimed at them.
 pub fn approve_sessions(p: &Pipeline, ids: &[String]) -> Result<()> {
-    ids.iter().try_for_each(|id| confirm_session(p, id))
+    ids.iter().try_for_each(|id| confirm_session(p, id))?;
+    let days: Vec<String> = ids.iter().filter_map(|id| p.store.session(id).ok().flatten()).map(|s| s.day).collect();
+    if let (Some(from), Some(to)) = (days.iter().min(), days.iter().max()) {
+        approve_bridges_for(p, ids, from, to)?;
+    }
+    Ok(())
 }
 
 /// Confirms the high-confidence sessions in the range that have a project.
@@ -305,4 +367,83 @@ pub fn ai_models() -> Vec<crate::infer::models::ModelInfo> {
         Some(key) => crate::infer::models::available_models(&key),
         None => crate::infer::models::known_models(),
     }
+}
+
+/// What the user decided about an unaccounted block.
+#[derive(Debug, Deserialize)]
+pub struct GapResolution {
+    pub project: Option<String>,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub not_work: bool,
+}
+
+fn find_gap(p: &Pipeline, id: &str) -> Result<Gap> {
+    let all = p.store.gaps_between_days("0000-00-00", "9999-99-99")?;
+    all.into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!("no gap {id}"))
+}
+
+/// Assigning a block makes a confirmed session from it; "not work" only marks it.
+pub fn resolve_gap(p: &Pipeline, id: &str, r: GapResolution) -> Result<()> {
+    let g = find_gap(p, id)?;
+    if r.not_work {
+        return p.store.set_gap_state(id, "not_work", None, None);
+    }
+    let session = Session {
+        id: format!("m{}", g.id),
+        day: g.day.clone(),
+        start_ts: g.start_ts,
+        end_ts: g.end_ts,
+        project: r.project.clone(),
+        label: r.label.clone().or_else(|| r.project.clone()),
+        summary: Some("Added from an unaccounted block".into()),
+        active_min: g.minutes(),
+        state: "confirmed".into(),
+        confidence: Some("high".into()),
+        ..Default::default()
+    };
+    p.store.insert_manual_session(&session)?;
+    p.store.set_gap_state(id, "assigned", r.project.as_deref(), r.label.as_deref())
+}
+
+/// Approves the open bridges whose minutes go to any of these sessions.
+pub fn approve_bridges_for(p: &Pipeline, session_ids: &[String], from: &str, to: &str) -> Result<usize> {
+    let mut n = 0;
+    for g in p.store.gaps_between_days(from, to)? {
+        if g.kind == "bridged" && g.state == "open" && g.targets.iter().any(|(id, _)| session_ids.contains(id)) {
+            p.store.set_gap_state(&g.id, "approved", None, None)?;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// Approves every open bridge in the range.
+pub fn approve_bridges(p: &Pipeline, from: &str, to: &str) -> Result<usize> {
+    let open: Vec<Gap> = p.store.gaps_between_days(from, to)?.into_iter().filter(|g| g.kind == "bridged" && g.state == "open").collect();
+    for g in &open {
+        p.store.set_gap_state(&g.id, "approved", None, None)?;
+    }
+    Ok(open.len())
+}
+
+/// Assigns every open unaccounted block of a day to one project the user picked.
+/// @returns the minutes it filled.
+pub fn fill_to_schedule(p: &Pipeline, day: &str, project: &str) -> Result<i64> {
+    let mut filled = 0;
+    for g in p.store.gaps_between_days(day, day)?.into_iter().filter(Gap::is_open_unaccounted) {
+        filled += g.minutes();
+        resolve_gap(p, &g.id, GapResolution { project: Some(project.into()), label: None, not_work: false })?;
+    }
+    Ok(filled)
+}
+
+/// Saves the schedule and recomputes gaps for the last 90 days.
+pub fn save_schedule(p: &Pipeline, schedule: Option<WorkSchedule>) -> Result<()> {
+    let mut s = Settings::load(&p.store)?;
+    s.schedule = schedule;
+    s.schedule_asked = true;
+    s.save(&p.store)?;
+    p.rebuild_range(Utc::now() - Duration::days(90), Utc::now())?;
+    Ok(())
 }

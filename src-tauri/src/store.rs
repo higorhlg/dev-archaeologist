@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::corrections::Rule;
 use crate::event::WorkEvent;
-use crate::sessions::Session;
+use crate::sessions::{gaps::Gap, Session};
 
 const SCHEMA: &str = include_str!("../migrations/0001_init.sql");
 
@@ -342,6 +342,67 @@ impl Store {
         conn.execute(
             "INSERT OR REPLACE INTO toggl_sync VALUES (?1, ?2, ?3, ?4, ?5)",
             params![key, toggl_id, duration_min, description, Utc::now().timestamp_millis()],
+        )?;
+        Ok(())
+    }
+
+    /// Replaces the open gaps of a day. Gaps the user resolved keep their row.
+    pub fn replace_day_gaps(&self, day: &str, fresh: &[Gap]) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM work_gaps WHERE day = ?1 AND state = 'open'", [day])?;
+        for g in fresh {
+            tx.execute(
+                "INSERT OR IGNORE INTO work_gaps (id, day, start_ts, end_ts, kind, state, targets, project, label)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![g.id, g.day, g.start_ts, g.end_ts, g.kind, g.state, serde_json::to_string(&g.targets)?, g.project, g.label],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn gaps_between_days(&self, from: &str, to: &str) -> Result<Vec<Gap>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, day, start_ts, end_ts, kind, state, targets, project, label FROM work_gaps
+             WHERE day >= ?1 AND day <= ?2 ORDER BY start_ts",
+        )?;
+        let rows = stmt.query_map([from, to], |r| {
+            let targets: String = r.get(6)?;
+            Ok(Gap {
+                id: r.get(0)?,
+                day: r.get(1)?,
+                start_ts: r.get(2)?,
+                end_ts: r.get(3)?,
+                kind: r.get(4)?,
+                state: r.get(5)?,
+                targets: serde_json::from_str(&targets).unwrap_or_default(),
+                project: r.get(7)?,
+                label: r.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_gap_state(&self, id: &str, state: &str, project: Option<&str>, label: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE work_gaps SET state = ?2, project = ?3, label = ?4 WHERE id = ?1",
+            params![id, state, project, label],
+        )?;
+        Ok(())
+    }
+
+    /// A session the user made from an unaccounted block. It starts confirmed.
+    pub fn insert_manual_session(&self, s: &Session) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            &format!("INSERT OR REPLACE INTO sessions ({SESSION_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"),
+            params![
+                s.id, s.day, s.start_ts, s.end_ts, s.project, s.branch, s.label, s.summary, s.active_min,
+                s.agent_only_min, s.state, s.confidence
+            ],
         )?;
         Ok(())
     }

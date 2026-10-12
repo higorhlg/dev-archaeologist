@@ -6,6 +6,7 @@ import Journal from "./Journal";
 import ProjectTimeline from "./ProjectTimeline";
 import Sources from "./Sources";
 import Reports from "./Reports";
+import ScheduleStep from "./ScheduleStep";
 
 type View = "day" | "journal" | "projects" | "reports" | "sources";
 
@@ -32,6 +33,12 @@ export default function App() {
   if (error) return <p className="fatal">The app could not read its local database: {error}</p>;
   if (!status) return null;
   if (!status.settings.backfill_done) return <Onboarding onDone={refresh} />;
+  if (!status.settings.schedule_asked)
+    return (
+      <div className="onboard">
+        <ScheduleStep initial={null} onDone={refresh} />
+      </div>
+    );
 
   return (
     <div className="shell">

@@ -8,7 +8,7 @@ use crate::corrections::{apply_label_rules, Rule};
 use crate::event::{kind, WorkEvent};
 use crate::project::ProjectResolver;
 use crate::redact::{redact, Privacy};
-use crate::sessions::cluster_sessions;
+use crate::sessions::{cluster_sessions, gaps::find_gaps};
 use crate::settings::Settings;
 use crate::store::Store;
 
@@ -59,10 +59,21 @@ impl Pipeline {
             apply_label_rules(s, &rules);
         }
         self.store.replace_day_sessions(&key, &sessions)?;
+        self.rebuild_gaps(day, &key, &events)?;
         let history_start = start - Duration::days(30);
         let prior = self.store.events_between(history_start.timestamp_millis(), start.timestamp_millis())?;
         self.store.replace_achievements(&key, &achievements::detect(&key, &events, &prior))?;
         Ok(sessions.len())
+    }
+
+    /// Finds the gaps inside work hours against the stored sessions, which include the
+    /// sessions the user made by hand. No schedule means no gaps.
+    fn rebuild_gaps(&self, day: NaiveDate, key: &str, events: &[WorkEvent]) -> Result<()> {
+        let gaps = match Settings::load(&self.store)?.schedule {
+            Some(schedule) => find_gaps(day, &self.store.sessions_for_day(key)?, events, &schedule),
+            None => vec![],
+        };
+        self.store.replace_day_gaps(key, &gaps)
     }
 
     /// Rebuilds every day that holds events in `[from, to]`.

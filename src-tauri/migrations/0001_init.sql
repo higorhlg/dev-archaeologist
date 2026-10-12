@@ -75,3 +75,16 @@ CREATE TABLE IF NOT EXISTS ticket_overrides (
   session_id TEXT PRIMARY KEY,
   ticket     TEXT NOT NULL                -- '' means "this session has no ticket"
 );
+
+CREATE TABLE IF NOT EXISTS work_gaps (
+  id        TEXT PRIMARY KEY,             -- stable hash of day and start
+  day       TEXT NOT NULL,
+  start_ts  INTEGER NOT NULL,
+  end_ts    INTEGER NOT NULL,
+  kind      TEXT NOT NULL CHECK (kind IN ('at_computer','bridged','unaccounted')),
+  state     TEXT NOT NULL CHECK (state IN ('open','approved','assigned','not_work')),
+  targets   TEXT NOT NULL DEFAULT '[]',   -- JSON [[session id, minutes]]: who gets the minutes
+  project   TEXT,                         -- set when the user assigns the block
+  label     TEXT
+);
+CREATE INDEX IF NOT EXISTS work_gaps_day ON work_gaps (day);

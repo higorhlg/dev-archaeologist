@@ -5,6 +5,23 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.4.0] - 2026-10-12
+
+### Added
+- Work hours: one range for the chosen work days with a lunch break, asked once after
+  the history scan (and once on the next launch for existing installs), editable in
+  Sources. Saving rebuilds gaps for the last 90 days.
+- Gaps inside work hours, 15 minutes or longer, sorted by evidence: at the computer
+  (keyboard or mouse input for half the gap), bridged (idle, at most 60 minutes, with a
+  session on both edges), or unaccounted. Time outside work hours is never filled.
+- Bridged minutes go to the next session when both sides are one project, else split.
+  They count only after approval; approving a report entry approves its bridges.
+- Day view: tinted work hours, hatched filled time in the lane that gets it, and an
+  "Unaccounted" lane whose blocks take a project, a label, or "not work" in one tap.
+- Reports: each day against the schedule, "Approve bridges", and "Fill to schedule"
+  with a default project the user sets, never applied without a click.
+- `dev-arch schedule`, `gaps`, `fill` and `approve-bridges`.
+
 ## [0.3.0] - 2026-10-12
 
 ### Added

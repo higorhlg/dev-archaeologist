@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::{clip, WorkEvent};
 use crate::pipeline::day_bounds;
-use crate::sessions::{attribute::attribute, Session};
+use crate::sessions::{attribute::attribute, gaps::Gap, Session};
 use crate::settings::{Settings, TogglProject};
 use crate::store::Store;
 use crate::tickets::{self, Ticket};
@@ -67,6 +67,10 @@ pub struct ReportEntry {
     pub sent: bool,
     /// Minutes this entry shared with parallel sessions, removed from `duration_min`.
     pub parallel_min: i64,
+    /// Inferred minutes inside `duration_min`: at-computer time and approved bridges.
+    pub gap_min: i64,
+    /// Bridged minutes not in `duration_min` until the entry is approved.
+    pub pending_bridge_min: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -97,6 +101,10 @@ struct Loaded {
     ticket: Option<Ticket>,
     /// The session's minutes after overlapping sessions on the same day share their minutes.
     report_min: i64,
+    /// Gap minutes that count: at-computer time and approved bridges aimed at this session.
+    gap_min: i64,
+    /// Bridged minutes aimed at this session that still wait for approval.
+    pending_min: i64,
 }
 
 fn parse_day(d: &str) -> Result<NaiveDate> {
@@ -117,25 +125,26 @@ fn load(store: &Store, q: &ReportQuery) -> Result<(Vec<Loaded>, BTreeSet<String>
             Some(key) => Some(Ticket { key: key.clone(), source: "you".into() }),
             None => tickets::detect(&events, session.branch.as_deref(), session.project.as_deref(), &prefixes),
         };
-        out.push((Loaded { session, ticket, report_min: 0 }, events));
+        out.push((Loaded { session, ticket, report_min: 0, gap_min: 0, pending_min: 0 }, events));
     }
     share_parallel_minutes(&mut out);
+    add_gap_minutes(&mut out, &store.gaps_between_days(&q.from, &q.to)?);
     Ok((out.into_iter().map(|(l, _)| l).collect(), prefixes))
 }
 
 /// Parallel agent sessions overlap, but a time sheet holds wall-clock time. On each day,
 /// machine-made session minutes scale down so they add up to the day's real active
-/// minutes. A session whose minutes the user edited keeps them.
+/// minutes. A session whose minutes the user set keeps them.
 fn share_parallel_minutes(loaded: &mut [(Loaded, Vec<WorkEvent>)]) {
     let days: BTreeSet<String> = loaded.iter().map(|(l, _)| l.session.day.clone()).collect();
     for day in days {
-        let machine = |l: &Loaded| l.session.day == day && l.session.state != "edited";
+        let machine = |l: &Loaded| l.session.day == day && !l.session.has_user_minutes();
         let events: Vec<&WorkEvent> = loaded.iter().filter(|(l, _)| machine(l)).flat_map(|(_, e)| e.iter()).collect();
         let wall = attribute(&events).0;
         let summed: i64 = loaded.iter().filter(|(l, _)| machine(l)).map(|(l, _)| l.session.active_min).sum();
         let factor = if summed > wall && summed > 0 { wall as f64 / summed as f64 } else { 1.0 };
         for (l, _) in loaded.iter_mut().filter(|(l, _)| l.session.day == day) {
-            l.report_min = if l.session.state == "edited" {
+            l.report_min = if l.session.has_user_minutes() {
                 l.session.active_min
             } else {
                 round_to_five(l.session.active_min as f64 * factor, l.session.active_min)
@@ -147,6 +156,21 @@ fn share_parallel_minutes(loaded: &mut [(Loaded, Vec<WorkEvent>)]) {
 fn round_to_five(min: f64, original: i64) -> i64 {
     let rounded = ((min / 5.0).round() as i64) * 5;
     if original > 0 { rounded.max(5) } else { 0 }
+}
+
+/// Gives each session the gap minutes aimed at it.
+fn add_gap_minutes(loaded: &mut [(Loaded, Vec<WorkEvent>)], gaps: &[Gap]) {
+    for g in gaps.iter().filter(|g| g.kind != "unaccounted") {
+        for (id, min) in &g.targets {
+            if let Some((l, _)) = loaded.iter_mut().find(|(l, _)| &l.session.id == id) {
+                if g.counts() {
+                    l.gap_min += min;
+                } else if g.state == "open" {
+                    l.pending_min += min;
+                }
+            }
+        }
+    }
 }
 
 fn group_key(l: &Loaded, g: Grouping) -> String {
@@ -181,6 +205,10 @@ fn joined_labels(group: &[&Loaded]) -> String {
 
 fn review_reasons(group: &[&Loaded]) -> Vec<String> {
     let mut r = Vec::new();
+    let pending: i64 = group.iter().map(|l| l.pending_min).sum();
+    if pending > 0 {
+        r.push(format!("{pending} min bridged, not approved"));
+    }
     if group.iter().any(|l| l.session.state != "confirmed") {
         r.push("Not confirmed".into());
     }
@@ -208,7 +236,9 @@ fn build_entry(key: String, group: Vec<&Loaded>, q: &ReportQuery, settings: &Set
     ReportEntry {
         day: first.session.day.clone(),
         start_ts: first.session.start_ts,
-        duration_min: group.iter().map(|l| l.report_min).sum(),
+        duration_min: group.iter().map(|l| l.report_min + l.gap_min).sum(),
+        gap_min: group.iter().map(|l| l.gap_min).sum(),
+        pending_bridge_min: group.iter().map(|l| l.pending_min).sum(),
         parallel_min: group.iter().map(|l| l.session.active_min - l.report_min).sum::<i64>().max(0),
         toggl_project: map.name,
         client: map.client,

@@ -153,6 +153,32 @@ async fn ai_models() -> CmdResult<Vec<devarch::infer::models::ModelInfo>> {
     tauri::async_runtime::spawn_blocking(api::ai_models).await.map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn report_days(p: State<Pipeline>, query: ReportQuery) -> CmdResult<Vec<api::DaySchedule>> {
+    api::report_days(&p, &query).map_err(err)
+}
+
+#[tauri::command]
+fn resolve_gap(p: State<Pipeline>, id: String, resolution: api::GapResolution) -> CmdResult<()> {
+    api::resolve_gap(&p, &id, resolution).map_err(err)
+}
+
+#[tauri::command]
+fn approve_bridges(p: State<Pipeline>, from: String, to: String) -> CmdResult<usize> {
+    api::approve_bridges(&p, &from, &to).map_err(err)
+}
+
+#[tauri::command]
+fn fill_to_schedule(p: State<Pipeline>, day: String, project: String) -> CmdResult<i64> {
+    api::fill_to_schedule(&p, &day, &project).map_err(err)
+}
+
+#[tauri::command]
+async fn save_schedule(p: State<'_, Pipeline>, schedule: Option<devarch::settings::WorkSchedule>) -> CmdResult<()> {
+    let p = p.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || api::save_schedule(&p, schedule)).await.map_err(|e| e.to_string())?.map_err(err)
+}
+
 fn main() {
     let store = Store::open(&default_db_path()).expect("open the local database");
     let pipeline = Pipeline::new(store);
@@ -163,7 +189,8 @@ fn main() {
             status, discover, backfill, day, session_events, projects, confirm_session, exclude_session,
             edit_session, generate_journal, confirm_journal, rebuild_day, save_settings, save_api_key,
             install_shell_hook, report, approve_sessions, approve_confident, set_entry_label, set_ticket,
-            export_toggl_csv, connect_toggl, toggl_projects, send_to_toggl, days_needing_labels, ai_models
+            export_toggl_csv, connect_toggl, toggl_projects, send_to_toggl, days_needing_labels, ai_models, report_days, resolve_gap,
+            approve_bridges, fill_to_schedule, save_schedule
         ])
         .run(tauri::generate_context!())
         .expect("run the Dev Archaeologist window");

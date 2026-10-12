@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, dayKey, hhmm, longDay, minutes, shiftDay, stratum, type DayView, type Session, type WorkEvent } from "./api";
+import { api, dayKey, hhmm, longDay, minutes, shiftDay, stratum, type DaySchedule, type DayView, type Gap, type Session, type WorkEvent } from "./api";
 
 type Props = { day: string; setDay: (d: string) => void; days: string[] };
 
@@ -23,15 +23,31 @@ export default function Timeline({ day, setDay, days }: Props) {
     return () => clearInterval(t);
   }, [day, load]);
 
+  const [openGap, setOpenGap] = useState<string | null>(null);
   const visible = view?.sessions.filter((s) => s.state !== "excluded") ?? [];
   const current = view?.sessions.find((s) => s.id === selected) ?? null;
+  const gap = view?.gaps.find((g) => g.id === openGap) ?? null;
 
   return (
     <div className={`day ${current ? "with-drawer" : ""}`}>
-      <DayHeader day={day} setDay={setDay} days={days} total={view?.active_min ?? 0} count={visible.length} />
+      <DayHeader day={day} setDay={setDay} days={days} total={view?.active_min ?? 0} count={visible.length} schedule={view?.schedule ?? null} />
       {error && <p className="error">{error}</p>}
       {view && visible.length === 0 && <EmptyDay day={day} days={days} setDay={setDay} />}
-      {visible.length > 0 && <Strata sessions={visible} selected={selected} onSelect={setSelected} />}
+      {visible.length > 0 && view && (
+        <Strata
+          sessions={visible}
+          gaps={view.gaps}
+          windows={view.work_windows}
+          selected={selected}
+          onSelect={setSelected}
+          openGap={openGap}
+          onOpenGap={setOpenGap}
+        />
+      )}
+      {gap && view && (
+        <GapPanel gap={gap} projects={[...new Set(visible.map((s) => s.project).filter((p): p is string => !!p))]}
+          onDone={() => { setOpenGap(null); load(); }} />
+      )}
       {view && view.achievements.length > 0 && (
         <ul className="badges">
           {view.achievements.map((a) => (
@@ -52,7 +68,7 @@ export default function Timeline({ day, setDay, days }: Props) {
   );
 }
 
-function DayHeader({ day, setDay, days, total, count }: { day: string; setDay: (d: string) => void; days: string[]; total: number; count: number }) {
+function DayHeader({ day, setDay, days, total, count, schedule }: { day: string; setDay: (d: string) => void; days: string[]; total: number; count: number; schedule: DaySchedule | null }) {
   const today = dayKey(new Date());
   return (
     <header className="day-head">
@@ -69,6 +85,10 @@ function DayHeader({ day, setDay, days, total, count }: { day: string; setDay: (
       <h1>{day === today ? "Today" : longDay(day)}</h1>
       <p className="day-total">
         <span className="num">{minutes(total)}</span> active across {count} {count === 1 ? "session" : "sessions"}
+        {schedule && schedule.filled_min > 0 && <>, <span className="num">{minutes(schedule.filled_min)}</span> filled</>}
+        {schedule && schedule.pending_bridge_min > 0 && <>, {minutes(schedule.pending_bridge_min)} bridged to approve</>}
+        {schedule && schedule.unaccounted_min > 0 && <>, <span className="warn">{minutes(schedule.unaccounted_min)} unaccounted</span></>}
+        {schedule && <span className="muted"> of {minutes(schedule.schedule_min)} scheduled</span>}
       </p>
     </header>
   );
@@ -84,11 +104,21 @@ function EmptyDay({ day, days, setDay }: { day: string; days: string[]; setDay: 
   );
 }
 
-/** The day as layers: one lane per project, sessions as bands on a shared clock. */
-function Strata({ sessions, selected, onSelect }: { sessions: Session[]; selected: string | null; onSelect: (id: string) => void }) {
+/** The day as layers: one lane per project, sessions as bands on a shared clock.
+ * Work hours are tinted. Filled gaps are hatched in the lane that gets their minutes;
+ * open unaccounted gaps sit dashed in their own lane. */
+function Strata({ sessions, gaps, windows, selected, onSelect, openGap, onOpenGap }: {
+  sessions: Session[];
+  gaps: Gap[];
+  windows: [number, number][];
+  selected: string | null;
+  onSelect: (id: string) => void;
+  openGap: string | null;
+  onOpenGap: (id: string | null) => void;
+}) {
   const { lanes, from, to } = useMemo(() => {
-    const start = Math.min(...sessions.map((s) => s.start_ts));
-    const end = Math.max(...sessions.map((s) => s.end_ts));
+    const start = Math.min(...sessions.map((s) => s.start_ts), ...windows.map((w) => w[0]));
+    const end = Math.max(...sessions.map((s) => s.end_ts), ...windows.map((w) => w[1]));
     const from = new Date(start).setMinutes(0, 0, 0);
     const to = new Date(end).setMinutes(60, 0, 0);
     const byProject = new Map<string, Session[]>();
@@ -98,11 +128,35 @@ function Strata({ sessions, selected, onSelect }: { sessions: Session[]; selecte
     }
     const lanes = [...byProject.entries()].sort((a, b) => sum(b[1]) - sum(a[1]));
     return { lanes, from, to };
-  }, [sessions]);
+  }, [sessions, windows]);
 
   const pct = (t: number) => ((t - from) / (to - from)) * 100;
   const hours: number[] = [];
   for (let t = from; t <= to; t += 3_600_000) hours.push(t);
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const unaccounted = gaps.filter((g) => g.kind === "unaccounted" && g.state === "open");
+
+  /** Pieces of filled gaps for one lane, in time order within each gap. */
+  const fills = (project: string) =>
+    gaps
+      .filter((g) => g.kind !== "unaccounted" && g.state !== "not_work")
+      .flatMap((g) => {
+        let t = g.start_ts;
+        return g.targets.map(([id, min]) => {
+          const piece = { g, start: t, end: t + min * 60_000, project: byId.get(id)?.project ?? "Other" };
+          t = piece.end;
+          return piece;
+        });
+      })
+      .filter((p) => p.project === project);
+
+  const track = (children: React.ReactNode) => (
+    <div className="lane-track">
+      {windows.map(([a, b]) => <span key={a} className="work-hours" style={{ left: `${pct(a)}%`, width: `${pct(b) - pct(a)}%` }} />)}
+      {hours.map((t) => <i key={t} className="tick" style={{ left: `${pct(t)}%` }} />)}
+      {children}
+    </div>
+  );
 
   return (
     <section className="strata" aria-label="Sessions by project over the day">
@@ -114,23 +168,75 @@ function Strata({ sessions, selected, onSelect }: { sessions: Session[]; selecte
       {lanes.map(([project, list]) => (
         <div className="lane" key={project}>
           <span className="lane-name" title={project}>{project}</span>
-          <div className="lane-track">
-            {hours.map((t) => (
-              <i key={t} className="tick" style={{ left: `${pct(t)}%` }} />
-            ))}
-            {list.map((s) => (
-              <button
-                key={s.id}
-                className={`band ${s.id === selected ? "on" : ""} ${s.state}`}
-                style={{ left: `${pct(s.start_ts)}%`, width: `max(6px, ${pct(s.end_ts) - pct(s.start_ts)}%)`, background: stratum(s.project) }}
-                title={`${hhmm(s.start_ts)}–${hhmm(s.end_ts)} ${s.label ?? ""}`}
-                onClick={() => onSelect(s.id)}
-              />
-            ))}
-          </div>
+          {track(
+            <>
+              {fills(project).map((f) => (
+                <span
+                  key={`${f.g.id}${f.start}`}
+                  className={`band fill ${f.g.kind} ${f.g.state}`}
+                  style={{ left: `${pct(f.start)}%`, width: `${pct(f.end) - pct(f.start)}%`, color: stratum(project) }}
+                  title={`${hhmm(f.start)}–${hhmm(f.end)} ${f.g.kind === "at_computer" ? "at the computer" : f.g.state === "approved" ? "bridged, approved" : "bridged, not approved"}`}
+                />
+              ))}
+              {list.map((s) => (
+                <button
+                  key={s.id}
+                  className={`band ${s.id === selected ? "on" : ""} ${s.state}`}
+                  style={{ left: `${pct(s.start_ts)}%`, width: `max(6px, ${pct(s.end_ts) - pct(s.start_ts)}%)`, background: stratum(s.project) }}
+                  title={`${hhmm(s.start_ts)}–${hhmm(s.end_ts)} ${s.label ?? ""}`}
+                  onClick={() => onSelect(s.id)}
+                />
+              ))}
+            </>,
+          )}
         </div>
       ))}
+      {unaccounted.length > 0 && (
+        <div className="lane">
+          <span className="lane-name warn">Unaccounted</span>
+          {track(
+            unaccounted.map((g) => (
+              <button
+                key={g.id}
+                className={`band gap ${g.id === openGap ? "on" : ""}`}
+                style={{ left: `${pct(g.start_ts)}%`, width: `${pct(g.end_ts) - pct(g.start_ts)}%` }}
+                title={`${hhmm(g.start_ts)}–${hhmm(g.end_ts)}: assign this time`}
+                onClick={() => onOpenGap(g.id === openGap ? null : g.id)}
+              />
+            )),
+          )}
+        </div>
+      )}
     </section>
+  );
+}
+
+/** One tap gives an unaccounted block a project, a label, or marks it as not work. */
+function GapPanel({ gap, projects, onDone }: { gap: Gap; projects: string[]; onDone: () => void }) {
+  const [other, setOther] = useState("");
+  const resolve = async (r: { project?: string; label?: string; not_work?: boolean }) => {
+    await api.resolveGap(gap.id, r);
+    onDone();
+  };
+  const mins = Math.round((gap.end_ts - gap.start_ts) / 60_000);
+  return (
+    <div className="gap-panel">
+      <b>{hhmm(gap.start_ts)}–{hhmm(gap.end_ts)}, {minutes(mins)} with no activity</b>
+      <span className="opts">
+        {projects.map((p) => (
+          <button key={p} onClick={() => resolve({ project: p })}>
+            <i style={{ background: stratum(p) }} />{p}
+          </button>
+        ))}
+        <button onClick={() => resolve({ label: "Meetings", project: "Meetings" })}>Meetings</button>
+        <span className="other">
+          <input value={other} placeholder="Other project or label" onChange={(e) => setOther(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && other.trim() && resolve({ project: other.trim() })} />
+          <button disabled={!other.trim()} onClick={() => resolve({ project: other.trim() })}>Assign</button>
+        </span>
+        <button className="link" onClick={() => resolve({ not_work: true })}>Not work</button>
+      </span>
+    </div>
   );
 }
 
