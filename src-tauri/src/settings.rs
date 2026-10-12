@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::reports::{Grouping, TicketMode};
+use crate::contexts::ContextRules;
+use crate::reports::{ContextFilter, Grouping, TicketMode};
 use crate::store::Store;
 
 /// The model every AI feature uses unless the user picks another in Sources.
@@ -28,6 +29,8 @@ pub struct Settings {
     pub schedule: Option<WorkSchedule>,
     /// Onboarding asked about work hours, whether or not the user gave them.
     pub schedule_asked: bool,
+    /// Which projects are work and which are personal.
+    pub contexts: ContextRules,
 }
 
 /// The user's regular hours. One range for every work day, with breaks.
@@ -66,11 +69,12 @@ pub struct ReportPrefs {
     pub range: String,
     pub grouping: Grouping,
     pub tickets: TicketMode,
+    pub context: ContextFilter,
 }
 
 impl Default for ReportPrefs {
     fn default() -> Self {
-        Self { range: "this_week".into(), grouping: Grouping::TicketDay, tickets: TicketMode::Prefix }
+        Self { range: "this_week".into(), grouping: Grouping::TicketDay, tickets: TicketMode::Prefix, context: ContextFilter::Work }
     }
 }
 
@@ -127,6 +131,7 @@ impl Default for Settings {
             report_prefs: ReportPrefs::default(),
             schedule: None,
             schedule_asked: false,
+            contexts: ContextRules::default(),
         }
     }
 }

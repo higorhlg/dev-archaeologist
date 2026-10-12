@@ -7,6 +7,7 @@ use anyhow::Result;
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::contexts::Context;
 use crate::event::{clip, WorkEvent};
 use crate::pipeline::day_bounds;
 use crate::sessions::{attribute::attribute, gaps::Gap, Session};
@@ -35,12 +36,30 @@ pub enum TicketMode {
     Off,
 }
 
+/// Which side of the user's work a report covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextFilter {
+    #[default]
+    Work,
+    Personal,
+    All,
+}
+
+impl ContextFilter {
+    pub fn admits(self, c: Context) -> bool {
+        matches!((self, c), (ContextFilter::All, _) | (ContextFilter::Work, Context::Work) | (ContextFilter::Personal, Context::Personal))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportQuery {
     pub from: String,
     pub to: String,
     pub grouping: Grouping,
     pub tickets: TicketMode,
+    #[serde(default)]
+    pub context: ContextFilter,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +74,7 @@ pub struct ReportEntry {
     pub billable: bool,
     /// Mapped to "never send to Toggl".
     pub skip: bool,
+    pub context: Context,
     pub label: String,
     pub description: String,
     pub tags: Vec<String>,
@@ -105,6 +125,7 @@ struct Loaded {
     gap_min: i64,
     /// Bridged minutes aimed at this session that still wait for approval.
     pending_min: i64,
+    context: Context,
 }
 
 fn parse_day(d: &str) -> Result<NaiveDate> {
@@ -117,6 +138,8 @@ fn load(store: &Store, q: &ReportQuery) -> Result<(Vec<Loaded>, BTreeSet<String>
     let history = store.events_between((from - Duration::days(PREFIX_HISTORY_DAYS)).timestamp_millis(), to.timestamp_millis())?;
     let prefixes = tickets::known_prefixes(&history);
     let overrides = store.ticket_overrides()?;
+    let rules = Settings::load(store)?.contexts;
+    let samples = store.project_sample_paths()?;
     let mut out: Vec<(Loaded, Vec<WorkEvent>)> = Vec::new();
     for session in store.sessions_between_days(&q.from, &q.to)? {
         let events = store.events_by_ids(&store.session_event_ids(&session.id)?)?;
@@ -125,13 +148,17 @@ fn load(store: &Store, q: &ReportQuery) -> Result<(Vec<Loaded>, BTreeSet<String>
             Some(key) => Some(Ticket { key: key.clone(), source: "you".into() }),
             None => tickets::detect(&events, session.branch.as_deref(), session.project.as_deref(), &prefixes),
         };
-        out.push((Loaded { session, ticket, report_min: 0, gap_min: 0, pending_min: 0 }, events));
+        let context = rules.resolve(session.project.as_deref().unwrap_or(""), samples.get(session.project.as_deref().unwrap_or("")).map(String::as_str));
+        out.push((Loaded { session, ticket, report_min: 0, gap_min: 0, pending_min: 0, context }, events));
     }
     share_parallel_minutes(&mut out);
     add_gap_minutes(&mut out, &store.gaps_between_days(&q.from, &q.to)?);
+    out.retain(|(l, _)| q.context.admits(l.context));
     Ok((out.into_iter().map(|(l, _)| l).collect(), prefixes))
 }
 
+/// Runs over work and personal sessions together, before the report filters by context,
+/// so the two sides never claim the same minute.
 /// Parallel agent sessions overlap, but a time sheet holds wall-clock time. On each day,
 /// machine-made session minutes scale down so they add up to the day's real active
 /// minutes. A session whose minutes the user set keeps them.
@@ -248,6 +275,7 @@ fn build_entry(key: String, group: Vec<&Loaded>, q: &ReportQuery, settings: &Set
         session_ids: group.iter().map(|l| l.session.id.clone()).collect(),
         sent: sent.contains(&key),
         key,
+        context: first.context,
         project,
         label,
         description,
@@ -299,9 +327,10 @@ pub fn confident_session_ids(store: &Store, q: &ReportQuery) -> Result<Vec<Strin
         .collect())
 }
 
-/// Entries that may leave the app: approved and not mapped to "never send".
+/// Entries that may leave the app: approved work, not mapped to "never send".
+/// Personal entries never go to Toggl, whatever the report shows.
 pub fn exportable(report: &Report) -> impl Iterator<Item = &ReportEntry> {
-    report.entries.iter().filter(|e| e.approved && !e.skip)
+    report.entries.iter().filter(|e| e.approved && !e.skip && e.context == Context::Work)
 }
 
 fn local(ms: i64) -> DateTime<Local> {

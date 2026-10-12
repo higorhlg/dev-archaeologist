@@ -5,6 +5,22 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.5.0] - 2026-10-12
+
+### Added
+- Work and personal sides. A project is work when it sits in a work folder or its repo
+  commits with a work email; both come from `includeIf "gitdir:…"` in the global git
+  config, so no setup is needed. Any other path is personal. Blocks assigned by hand
+  come from work hours and count as work. Sources lists every project with its side
+  and lets the user pin one.
+- Reports filter by side (work by default, saved with the other report options).
+  Personal entries never go to Toggl, in CSV or through the API.
+- Day view tags personal sessions.
+
+### Fixed
+- Parallel minutes are shared across both sides before the report filters, so work
+  plus personal equals all.
+
 ## [0.4.0] - 2026-10-12
 
 ### Added

@@ -16,6 +16,7 @@ export type Session = {
   state: SessionState;
   confidence: "low" | "medium" | "high" | null;
   chips: { label: string; n: number }[];
+  context: Context;
 };
 
 export type Achievement = { id: string; day: string; rule: string; title: string; detail: string; evidence_id: string };
@@ -68,7 +69,16 @@ export type WorkEvent = {
 
 export type Grouping = "session" | "ticket_day" | "project_day";
 export type TicketMode = "prefix" | "tag" | "off";
-export type ReportPrefs = { range: string; grouping: Grouping; tickets: TicketMode };
+export type Context = "work" | "personal";
+export type ContextFilter = Context | "all";
+export type ReportPrefs = { range: string; grouping: Grouping; tickets: TicketMode; context: ContextFilter };
+export type ContextRules = {
+  work_paths: string[];
+  personal_paths: string[];
+  work_emails: string[];
+  overrides: Record<string, Context>;
+};
+export type ProjectContext = { project: string; context: Context; chosen: boolean };
 export type TogglProject = { name: string; id: number | null; client: string; billable: boolean; skip: boolean };
 export type TogglSettings = {
   email: string;
@@ -97,6 +107,7 @@ export type Settings = {
   report_prefs: ReportPrefs;
   schedule: WorkSchedule | null;
   schedule_asked: boolean;
+  contexts: ContextRules;
 };
 
 export type Status = {
@@ -108,7 +119,7 @@ export type Status = {
 };
 
 export type Ticket = { key: string; source: string };
-export type ReportQuery = { from: string; to: string; grouping: Grouping; tickets: TicketMode };
+export type ReportQuery = { from: string; to: string; grouping: Grouping; tickets: TicketMode; context: ContextFilter };
 export type ReportEntry = {
   key: string;
   day: string;
@@ -119,6 +130,7 @@ export type ReportEntry = {
   client: string;
   billable: boolean;
   skip: boolean;
+  context: Context;
   label: string;
   description: string;
   tags: string[];
@@ -190,6 +202,8 @@ export const api = {
   approveBridges: (from: string, to: string) => invoke<number>("approve_bridges", { from, to }),
   fillToSchedule: (day: string, project: string) => invoke<number>("fill_to_schedule", { day, project }),
   saveSchedule: (schedule: WorkSchedule | null) => invoke<void>("save_schedule", { schedule }),
+  projectContexts: () => invoke<ProjectContext[]>("project_contexts"),
+  setProjectContext: (project: string, context: Context | null) => invoke<void>("set_project_context", { project, context }),
   aiModels: () => invoke<ModelInfo[]>("ai_models"),
   daysNeedingLabels: (query: ReportQuery) => invoke<string[]>("days_needing_labels", { query }),
 };

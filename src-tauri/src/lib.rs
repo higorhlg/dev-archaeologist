@@ -6,6 +6,7 @@ pub mod adapters;
 pub mod api;
 pub mod backfill;
 pub mod collectors;
+pub mod contexts;
 pub mod corrections;
 pub mod daemon;
 pub mod event;

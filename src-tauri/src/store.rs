@@ -407,6 +407,17 @@ impl Store {
         Ok(())
     }
 
+    /// One real path per project, for deciding whether the project is work or personal.
+    pub fn project_sample_paths(&self) -> Result<std::collections::HashMap<String, String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT project, MAX(path) FROM work_events
+             WHERE project IS NOT NULL AND path IS NOT NULL AND path != '[secret file]' GROUP BY project",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()?)

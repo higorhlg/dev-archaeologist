@@ -13,6 +13,7 @@ use crate::infer::journal;
 use crate::pipeline::Pipeline;
 use crate::sessions::{attribute::attribute, cluster::evidence_counts, gaps::{work_windows, Gap}, Session};
 use crate::settings::WorkSchedule;
+use crate::contexts::Context;
 use crate::settings::Settings;
 use crate::reports::{self, Report, ReportQuery};
 use crate::store::{Achievement, Journal};
@@ -29,6 +30,7 @@ pub struct SessionView {
     #[serde(flatten)]
     pub session: Session,
     pub chips: Vec<Chip>,
+    pub context: Context,
 }
 
 /// One day measured against the work schedule.
@@ -135,12 +137,16 @@ pub fn day_view(p: &Pipeline, day: &str) -> Result<DayView> {
         loaded.push((s, events));
     }
     let active = day_active_min(&loaded);
+    let rules = Settings::load(&p.store)?.contexts;
+    let samples = p.store.project_sample_paths()?;
     let sessions = loaded
         .into_iter()
         .map(|(s, events)| {
             let refs: Vec<&WorkEvent> = events.iter().collect();
             let chips = evidence_counts(&refs).into_iter().map(|(label, n)| Chip { label, n }).collect();
-            SessionView { session: s, chips }
+            let project = s.project.clone().unwrap_or_default();
+            let context = rules.resolve(&project, samples.get(&project).map(String::as_str));
+            SessionView { session: s, chips, context }
         })
         .collect();
     let gaps = p.store.gaps_between_days(day, day)?;
@@ -446,4 +452,46 @@ pub fn save_schedule(p: &Pipeline, schedule: Option<WorkSchedule>) -> Result<()>
     s.save(&p.store)?;
     p.rebuild_range(Utc::now() - Duration::days(90), Utc::now())?;
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectContext {
+    pub project: String,
+    pub context: Context,
+    /// The user chose this side; it is not from a rule.
+    pub chosen: bool,
+}
+
+/// Every project with a session in the last 90 days, with its side and where that came from.
+pub fn project_contexts(p: &Pipeline) -> Result<Vec<ProjectContext>> {
+    let rules = Settings::load(&p.store)?.contexts;
+    let samples = p.store.project_sample_paths()?;
+    let today = Local::now().date_naive();
+    let from = (today - Duration::days(90)).format("%Y-%m-%d").to_string();
+    let mut names: Vec<String> = p
+        .store
+        .sessions_between_days(&from, &today.format("%Y-%m-%d").to_string())?
+        .into_iter()
+        .filter_map(|s| s.project)
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names
+        .into_iter()
+        .map(|project| ProjectContext {
+            context: rules.resolve(&project, samples.get(&project).map(String::as_str)),
+            chosen: rules.overrides.contains_key(&project),
+            project,
+        })
+        .collect())
+}
+
+/// Pins a project to work or personal. `None` goes back to the rules.
+pub fn set_project_context(p: &Pipeline, project: &str, context: Option<Context>) -> Result<()> {
+    let mut s = Settings::load(&p.store)?;
+    match context {
+        Some(c) => s.contexts.overrides.insert(project.to_string(), c),
+        None => s.contexts.overrides.remove(project),
+    };
+    s.save(&p.store)
 }

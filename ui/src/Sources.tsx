@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type ModelInfo, type Settings, type Status } from "./api";
+import { api, type Context, type ModelInfo, type ProjectContext, type Settings, type Status } from "./api";
 import ScheduleStep from "./ScheduleStep";
 
 type Toggle = { key: keyof Settings["sources"]; label: string; note: string; disabled?: boolean };
@@ -95,6 +95,8 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
         <ScheduleStep compact initial={status.settings.schedule} projects={Object.keys(status.settings.toggl.project_map)} onDone={onSaved} />
       </section>
 
+      <WorkAndPersonal settings={s} onRules={(contexts) => setS({ ...s, contexts })} onPinned={onSaved} />
+
       <section>
         <h2>Where to look</h2>
         <label className="area">
@@ -178,5 +180,54 @@ function ModelPicker({ value, onChange }: { value: string; onChange: (model: str
       </select>
       {note && <small className="muted">{note}</small>}
     </label>
+  );
+}
+
+/** Shows which projects are work, from the git identity rules, and lets the user pin one. */
+function WorkAndPersonal({ settings, onRules, onPinned }: { settings: Settings; onRules: (r: Settings["contexts"]) => void; onPinned: () => void }) {
+  const [projects, setProjects] = useState<ProjectContext[]>([]);
+  const load = () => api.projectContexts().then(setProjects);
+  useEffect(() => {
+    load();
+  }, []);
+  const r = settings.contexts;
+  const pin = async (project: string, context: Context | null) => {
+    await api.setProjectContext(project, context);
+    const overrides = { ...r.overrides };
+    if (context) overrides[project] = context;
+    else delete overrides[project];
+    onRules({ ...r, overrides });
+    onPinned();
+    load();
+  };
+
+  return (
+    <section>
+      <h2>Work and personal</h2>
+      <p className="muted">
+        Reports show work by default, and personal time never goes to Toggl. A project is work when it sits in a work
+        folder or its repo commits with a work email. Your git config sets both.
+      </p>
+      <label className="area">
+        Work folders, one per line
+        <textarea rows={2} value={r.work_paths.join("\n")} onChange={(e) => onRules({ ...r, work_paths: lines(e.target.value) })} />
+      </label>
+      <label className="area">
+        Work emails, one per line
+        <textarea rows={1} value={r.work_emails.join("\n")} onChange={(e) => onRules({ ...r, work_emails: lines(e.target.value) })} />
+      </label>
+      <ul className="contexts">
+        {projects.map((p) => (
+          <li key={p.project}>
+            <span>{p.project}{p.chosen && <small className="muted"> your choice</small>}</span>
+            <span className="seg" role="group" aria-label={`${p.project} side`}>
+              <button className={p.context === "work" ? "on" : ""} onClick={() => pin(p.project, "work")}>Work</button>
+              <button className={p.context === "personal" ? "on" : ""} onClick={() => pin(p.project, "personal")}>Personal</button>
+              {p.chosen && <button onClick={() => pin(p.project, null)} title="Use the folder and email rules">Auto</button>}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

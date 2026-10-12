@@ -7,6 +7,7 @@ import {
   minutes,
   shiftDay,
   stratum,
+  type ContextFilter,
   type DaySchedule,
   type Grouping,
   type Report,
@@ -24,6 +25,11 @@ const RANGES: { id: string; label: string }[] = [
   { id: "last_week", label: "Last week" },
   { id: "this_month", label: "This month" },
   { id: "last_month", label: "Last month" },
+];
+const CONTEXTS: { id: ContextFilter; label: string }[] = [
+  { id: "work", label: "Work" },
+  { id: "personal", label: "Personal" },
+  { id: "all", label: "All" },
 ];
 const GROUPINGS: { id: Grouping; label: string }[] = [
   { id: "ticket_day", label: "Per ticket" },
@@ -68,8 +74,8 @@ export default function Reports({ status, onSaved, onOpenDay, goToSources }: Pro
 
   const [from, to] = rangeDays(prefs.range);
   const query: ReportQuery = useMemo(
-    () => ({ from, to, grouping: prefs.grouping, tickets: prefs.tickets }),
-    [from, to, prefs.grouping, prefs.tickets],
+    () => ({ from, to, grouping: prefs.grouping, tickets: prefs.tickets, context: prefs.context ?? "work" }),
+    [from, to, prefs.grouping, prefs.tickets, prefs.context],
   );
 
   const load = useCallback(() => {
@@ -125,6 +131,7 @@ export default function Reports({ status, onSaved, onOpenDay, goToSources }: Pro
       </header>
 
       <div className="report-controls">
+        <Seg label="Side" options={CONTEXTS} value={prefs.context ?? "work"} onChange={(context) => applyPrefs({ ...prefs, context })} />
         <Seg label="Range" options={RANGES} value={prefs.range} onChange={(range) => applyPrefs({ ...prefs, range })} />
         <Seg label="Entries" options={GROUPINGS} value={prefs.grouping} onChange={(grouping) => applyPrefs({ ...prefs, grouping })} />
         <Seg label="Tickets" options={TICKET_MODES} value={prefs.tickets} onChange={(tickets) => applyPrefs({ ...prefs, tickets })} />
@@ -271,7 +278,8 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
             <button className="ticket add" onClick={() => setEditingTicket(true)}>Add ticket</button>
           )}
           {e.sent && <span className="tag ok">In Toggl</span>}
-          {e.skip && <span className="tag">Not sent to Toggl</span>}
+          {e.context === "personal" && <span className="tag">Personal, not sent to Toggl</span>}
+          {e.skip && e.context === "work" && <span className="tag">Not sent to Toggl</span>}
           {e.billable && !e.skip && <span className="tag">Billable</span>}
         </span>
         {single ? (

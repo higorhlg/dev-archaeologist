@@ -261,6 +261,7 @@ function SessionRow({ s, active, onSelect }: { s: Session; active: boolean; onSe
               <span key={c.label} className="chip">{c.n} {c.label}</span>
             ))}
             <StateTag s={s} />
+            {s.context === "personal" && <span className="tag personal">Personal</span>}
           </span>
         </span>
       </button>

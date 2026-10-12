@@ -287,3 +287,9 @@ input[role="switch"]:checked::after { left: 16px; }
 .day-schedule .bar .u { background: var(--low-wash); border: 1px dashed var(--low); }
 .fill-picker { display: inline-flex; gap: 4px; align-items: center; }
 .fill-picker input { border: 1px solid var(--rule); border-radius: 6px; padding: 3px 6px; background: var(--paper); width: 170px; }
+
+/* ---------- work and personal ---------- */
+.tag.personal { background: color-mix(in srgb, var(--focus) 14%, transparent); color: var(--focus); }
+.contexts { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.contexts li { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-top: 1px solid var(--rule-soft); font-size: 13px; }
+.contexts .seg button { padding: 3px 10px; font-size: 12px; }

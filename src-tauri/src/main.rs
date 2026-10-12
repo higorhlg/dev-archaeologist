@@ -179,6 +179,16 @@ async fn save_schedule(p: State<'_, Pipeline>, schedule: Option<devarch::setting
     tauri::async_runtime::spawn_blocking(move || api::save_schedule(&p, schedule)).await.map_err(|e| e.to_string())?.map_err(err)
 }
 
+#[tauri::command]
+fn project_contexts(p: State<Pipeline>) -> CmdResult<Vec<api::ProjectContext>> {
+    api::project_contexts(&p).map_err(err)
+}
+
+#[tauri::command]
+fn set_project_context(p: State<Pipeline>, project: String, context: Option<devarch::contexts::Context>) -> CmdResult<()> {
+    api::set_project_context(&p, &project, context).map_err(err)
+}
+
 fn main() {
     let store = Store::open(&default_db_path()).expect("open the local database");
     let pipeline = Pipeline::new(store);
@@ -190,7 +200,7 @@ fn main() {
             edit_session, generate_journal, confirm_journal, rebuild_day, save_settings, save_api_key,
             install_shell_hook, report, approve_sessions, approve_confident, set_entry_label, set_ticket,
             export_toggl_csv, connect_toggl, toggl_projects, send_to_toggl, days_needing_labels, ai_models, report_days, resolve_gap,
-            approve_bridges, fill_to_schedule, save_schedule
+            approve_bridges, fill_to_schedule, save_schedule, project_contexts, set_project_context
         ])
         .run(tauri::generate_context!())
         .expect("run the Dev Archaeologist window");

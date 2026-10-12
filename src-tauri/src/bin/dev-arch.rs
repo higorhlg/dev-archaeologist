@@ -4,7 +4,7 @@
 //!   dev-arch backfill [days]     read past logs into the local store
 //!   dev-arch day [YYYY-MM-DD]    print one day's sessions and achievements
 //!   dev-arch journal YYYY-MM-DD  write the day's journal with the Claude API
-//!   dev-arch report FROM TO [session|ticket_day|project_day]
+//!   dev-arch report FROM TO [session|ticket_day|project_day] [work|personal|all]
 //!   dev-arch schedule [HH:MM HH:MM | off]  set Mon–Fri hours with lunch 12–13
 //!   dev-arch gaps [YYYY-MM-DD]   print the day's gaps inside work hours
 //!   dev-arch fill DAY PROJECT     assign a day's unaccounted blocks to one project
@@ -82,6 +82,7 @@ fn main() -> Result<()> {
                 to: args.get(3).cloned().unwrap_or(today),
                 grouping: serde_json::from_value(serde_json::json!(args.get(4).map(String::as_str).unwrap_or("ticket_day")))?,
                 tickets: devarch::reports::TicketMode::Prefix,
+                context: serde_json::from_value(serde_json::json!(args.get(5).map(String::as_str).unwrap_or("work")))?,
             };
             let r = api::report(&p, &q)?;
             println!("{} min total · {} approved · {} to review · prefixes {:?}", r.total_min, r.approved_min, r.review_count, r.known_prefixes);
