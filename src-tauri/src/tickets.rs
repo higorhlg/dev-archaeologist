@@ -93,10 +93,19 @@ impl Tally {
         }
     }
 
-    fn winner(self) -> Option<Ticket> {
-        let (key, _) = self.score.iter().max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))?;
+    /// The key with the most weight among those `keep` accepts; ties go to the smaller key.
+    fn winner(&self, keep: impl Fn(&str) -> bool) -> Option<Ticket> {
+        let (key, _) =
+            self.score.iter().filter(|(k, _)| keep(k)).max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))?;
         Some(Ticket { source: self.best_source[key].1.to_string(), key: key.clone() })
     }
+}
+
+/// The Jira ticket and the GitHub issue or pull request a session's evidence points to.
+#[derive(Debug, Default)]
+pub struct Detected {
+    pub jira: Option<Ticket>,
+    pub github: Option<Ticket>,
 }
 
 /// The first Jira key in `text` whose prefix is in `prefixes`.
@@ -104,10 +113,10 @@ pub fn known_jira_key(text: &str, prefixes: &BTreeSet<String>) -> Option<String>
     jira_re().captures_iter(text).map(|c| c[0].to_string()).find(|k| k.split('-').next().is_some_and(|p| prefixes.contains(p)))
 }
 
-/// Picks the ticket with the most weighted evidence in a session.
+/// Picks the Jira ticket and the GitHub ref with the most weighted evidence in a session.
 /// @param project the session's project, used to name GitHub issues (`project#128`).
 /// @param prefixes from `known_prefixes`, over a wide window of history.
-pub fn detect(events: &[WorkEvent], branch: Option<&str>, project: Option<&str>, prefixes: &BTreeSet<String>) -> Option<Ticket> {
+pub fn detect(events: &[WorkEvent], branch: Option<&str>, project: Option<&str>, prefixes: &BTreeSet<String>) -> Detected {
     let mut t = Tally::default();
     let known = |key: &str| key.split('-').next().is_some_and(|p| prefixes.contains(p));
     let gh = |n: &str| format!("{}#{n}", project.unwrap_or("gh"));
@@ -156,7 +165,7 @@ pub fn detect(events: &[WorkEvent], branch: Option<&str>, project: Option<&str>,
             _ => {}
         }
     }
-    t.winner()
+    Detected { jira: t.winner(|k| !is_github_key(k)), github: t.winner(is_github_key) }
 }
 
 #[cfg(test)]
@@ -179,7 +188,7 @@ mod tests {
         ];
         let prefixes = known_prefixes(&events);
         assert_eq!(prefixes.iter().collect::<Vec<_>>(), vec!["SHOP"]);
-        let t = detect(&events, None, Some("orders-api"), &prefixes).unwrap();
+        let t = detect(&events, None, Some("orders-api"), &prefixes).jira.unwrap();
         assert_eq!(t.key, "SHOP-1261");
         assert_eq!(t.source, "commit");
     }
@@ -187,9 +196,20 @@ mod tests {
     #[test]
     fn github_issue_from_branch_and_squash_ref() {
         let events = vec![ev(kind::COMMIT, "feat: cache price history in Redis (#341)", Some("issue-128"))];
-        let t = detect(&events, Some("issue-128"), Some("insight-ui"), &BTreeSet::new()).unwrap();
+        let found = detect(&events, Some("issue-128"), Some("insight-ui"), &BTreeSet::new());
+        let t = found.github.unwrap();
         assert_eq!(t.key, "insight-ui#128");
         assert_eq!(t.source, "branch");
+        assert!(found.jira.is_none());
+    }
+
+    #[test]
+    fn jira_and_github_are_found_side_by_side() {
+        let events = vec![ev(kind::COMMIT, "fix(SHOP-1277): enable EU markets (#3117)", Some("shop-1277-eu"))];
+        let prefixes = known_prefixes(&events);
+        let found = detect(&events, None, Some("web-frontend"), &prefixes);
+        assert_eq!(found.jira.unwrap().key, "SHOP-1277");
+        assert_eq!(found.github.unwrap().key, "web-frontend#3117");
     }
 
     #[test]
@@ -201,6 +221,7 @@ mod tests {
     #[test]
     fn no_evidence_no_ticket() {
         let events = vec![ev(kind::PROMPT, "make the tests pass", None)];
-        assert!(detect(&events, Some("main"), Some("x"), &BTreeSet::new()).is_none());
+        let found = detect(&events, Some("main"), Some("x"), &BTreeSet::new());
+        assert!(found.jira.is_none() && found.github.is_none());
     }
 }

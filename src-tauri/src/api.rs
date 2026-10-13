@@ -17,6 +17,7 @@ use crate::contexts::{Context, ContextRules};
 use crate::reports::ContextFilter;
 use std::collections::HashMap;
 use crate::settings::Settings;
+use crate::tickets;
 use crate::reports::{self, Report, ReportQuery};
 use crate::store::{Achievement, Journal};
 use crate::toggl;
@@ -346,14 +347,35 @@ pub fn set_entry_label(p: &Pipeline, session_id: &str, label: &str) -> Result<()
     edit_session(p, session_id, SessionEdit { label: Some(label.into()), project: None, active_min: None, apply_rule: false })
 }
 
-/// Pins a ticket on sessions. `Some("")` means "no ticket"; `None` goes back to detection.
-/// Pinning a ticket also removes the sessions' open suggestions.
+/// Pins a ticket on sessions. A GitHub key (`repo#N`) goes to the GitHub ref; anything else is
+/// the Jira ticket. `Some("")` means "no Jira ticket"; `None` goes back to detection.
+/// Pinning a Jira ticket keeps the GitHub ref: one stored as the ticket moves to the GitHub ref,
+/// and a suggestion found through a GitHub ticket pins that ticket as the GitHub ref.
+/// It also removes the sessions' open suggestions.
 pub fn set_ticket(p: &Pipeline, session_ids: &[String], ticket: Option<String>) -> Result<()> {
-    session_ids.iter().try_for_each(|id| p.store.set_ticket_override(id, ticket.as_deref()))?;
-    if ticket.as_deref().is_some_and(|t| !t.trim().is_empty()) {
+    let ticket = ticket.map(|t| t.trim().to_string());
+    if let Some(key) = ticket.as_deref().filter(|k| tickets::is_github_key(k)) {
+        return set_github_ref(p, session_ids, Some(key.to_string()));
+    }
+    let overrides = p.store.ticket_overrides()?;
+    let suggestions = p.store.ticket_suggestions()?;
+    for id in session_ids {
+        let moved = overrides.get(id).filter(|k| tickets::is_github_key(k));
+        let via = suggestions.get(id).filter(|s| Some(&s.ticket) == ticket.as_ref()).and_then(|s| s.via.as_ref());
+        if let Some(github) = via.or(moved) {
+            p.store.set_github_ref_override(id, Some(github))?;
+        }
+        p.store.set_ticket_override(id, ticket.as_deref())?;
+    }
+    if ticket.as_deref().is_some_and(|t| !t.is_empty()) {
         p.store.clear_suggestions(session_ids)?;
     }
     Ok(())
+}
+
+/// Pins the GitHub ref of sessions. `Some("")` means "no GitHub ref"; `None` goes back to detection.
+pub fn set_github_ref(p: &Pipeline, session_ids: &[String], github_ref: Option<String>) -> Result<()> {
+    session_ids.iter().try_for_each(|id| p.store.set_github_ref_override(id, github_ref.as_deref()))
 }
 
 /// Hides the sessions' suggestion. The same ticket is never suggested for them again.

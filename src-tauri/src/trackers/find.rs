@@ -1,5 +1,5 @@
-//! "Find tickets": suggests a ticket for each report entry that has none, and a Jira key for
-//! each entry whose ticket is a GitHub issue or pull request.
+//! "Find tickets": suggests a ticket for each report entry without a Jira ticket. An entry that
+//! has a GitHub issue or pull request gets only a Jira suggestion.
 //! Rules decide clear cases. The AI breaks close calls in one call per run.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -30,7 +30,7 @@ const MAX_TEXT_CHARS: usize = 1500;
 
 #[derive(Debug, Default, Serialize)]
 pub struct FindResult {
-    /// Entries in the report that had no ticket or a GitHub ticket.
+    /// Entries in the report without a Jira ticket.
     pub checked: usize,
     pub suggested: usize,
     /// Suggestions the AI tie-break picked.
@@ -41,17 +41,19 @@ pub struct FindResult {
 }
 
 /// Asks the connected trackers for the user's tickets in the report range, then stores a
-/// suggestion when one fits: any ticket for an entry without one, and only a Jira key for an
-/// entry whose ticket is a GitHub issue or pull request. Never sets a ticket itself.
+/// suggestion when one fits: any ticket for an entry with neither a Jira ticket nor a GitHub ref,
+/// and only a Jira key for an entry with a GitHub ref. Also refreshes the titles and epics of the
+/// report's Jira tickets. Never sets a ticket itself.
 pub fn find_tickets(store: &Store, q: &ReportQuery) -> Result<FindResult> {
     let settings = Settings::load(store)?;
     let report = reports::build(store, q)?;
+    let range = DayRange { from: parse_day(&q.from)?, to: parse_day(&q.to)? };
     let open: Vec<&ReportEntry> = report.entries.iter().filter(|e| needs_lookup(e)).collect();
     let mut result = FindResult { checked: open.len(), ..Default::default() };
+    refresh_ticket_info(store, &settings, &report.entries, &range, &mut result)?;
     if open.is_empty() {
         return Ok(result);
     }
-    let range = DayRange { from: parse_day(&q.from)?, to: parse_day(&q.to)? };
     let prefixes = prefixes_by_project(store, &range)?;
     let evidence = entry_evidence(store, q, &open, &prefixes)?;
     let repos: Vec<String> = evidence.iter().filter_map(|e| e.repo.clone()).collect::<BTreeSet<_>>().into_iter().collect();
@@ -74,8 +76,8 @@ pub fn find_tickets(store: &Store, q: &ReportQuery) -> Result<FindResult> {
             result.suggested += n;
             continue;
         }
-        let has_ticket = e.ticket.is_some();
-        match judge_jira_first(ev, &leads_to_jira, (!has_ticket).then_some(&candidates[..]), &weights) {
+        let has_github = e.github.is_some();
+        match judge_jira_first(ev, &leads_to_jira, (!has_github).then_some(&candidates[..]), &weights) {
             Verdict::Match(s) => result.suggested += suggester.suggest(by_id[ev.id.as_str()], s.candidate, &s.reasons.join(", "), false)?,
             Verdict::Close(list) => close.push((ev, list)),
             Verdict::Nothing => {}
@@ -101,16 +103,50 @@ fn judge_jira_first<'a>(ev: &EntryEvidence, jira: &'a [Candidate], fallback: Opt
     }
 }
 
-/// An entry with sessions and no ticket, or with a GitHub ticket a Jira key can replace.
+/// GitHub refs whose title is fetched per run when it is not stored yet.
+const MAX_GITHUB_TITLES: usize = 25;
+
+/// Fetches the title, link and epic of every Jira ticket in the report, and the title and link of
+/// each GitHub ref with none stored, so the report can show them on hover.
+fn refresh_ticket_info(store: &Store, settings: &Settings, entries: &[ReportEntry], range: &DayRange, result: &mut FindResult) -> Result<()> {
+    let t = &settings.trackers;
+    let jira_keys: Vec<String> = entries.iter().filter_map(|e| e.jira.as_ref()).map(|t| t.key.clone()).collect::<BTreeSet<_>>().into_iter().collect();
+    if !jira_keys.is_empty() && jira::has_token() && !t.jira_site.is_empty() && !t.jira_email.is_empty() {
+        match jira::tickets_by_key(&t.jira_site, &t.jira_email, &jira_keys, range) {
+            Ok(found) => store.save_ticket_info(&found.iter().map(TicketInfo::from).collect::<Vec<_>>())?,
+            Err(err) => result.errors.push(format!("Jira titles: {err:#}")),
+        }
+    }
+    if !t.github {
+        return Ok(());
+    }
+    let known = store.ticket_info()?;
+    let slugs: HashMap<String, String> =
+        repo_slugs(store)?.into_values().filter_map(|slug| Some((slug.rsplit('/').next()?.to_string(), slug))).collect();
+    let missing: BTreeSet<&str> =
+        entries.iter().filter_map(|e| e.github.as_ref()).map(|t| t.key.as_str()).filter(|k| !known.contains_key(*k)).collect();
+    let mut found = Vec::new();
+    for key in missing.into_iter().take(MAX_GITHUB_TITLES) {
+        let Some((name, number)) = key.split_once('#') else { continue };
+        let Some(slug) = slugs.get(&name.to_lowercase()) else { continue };
+        match github::ticket(slug, number) {
+            Ok(c) => found.push(TicketInfo::from(&c)),
+            Err(err) => result.errors.push(format!("GitHub {key}: {err:#}")),
+        }
+    }
+    store.save_ticket_info(&found)
+}
+
+/// An entry with sessions and no Jira ticket.
 fn needs_lookup(e: &ReportEntry) -> bool {
-    !e.session_ids.is_empty() && e.ticket.as_ref().is_none_or(|t| tickets::is_github_key(&t.key))
+    !e.session_ids.is_empty() && e.jira.is_none()
 }
 
 fn parse_day(d: &str) -> Result<NaiveDate> {
     Ok(NaiveDate::parse_from_str(d, "%Y-%m-%d")?)
 }
 
-/// The Jira ticket that links each GitHub ticket in play: the GitHub tickets of the entries
+/// The Jira ticket that links each GitHub ticket in play: the GitHub refs of the entries
 /// and the GitHub candidates. Empty when Jira is not connected.
 fn jira_tickets_linking(
     settings: &Settings,
@@ -123,7 +159,7 @@ fn jira_tickets_linking(
     if !jira::has_token() || t.jira_site.is_empty() || t.jira_email.is_empty() {
         return HashMap::new();
     }
-    let current = open.iter().filter_map(|e| e.ticket.as_ref()).map(|t| t.key.clone());
+    let current = open.iter().filter_map(|e| e.github.as_ref()).map(|t| t.key.clone());
     let found = candidates.iter().filter(|c| c.tracker == "github").map(|c| c.key.clone());
     let keys: Vec<String> = current.chain(found).collect::<BTreeSet<_>>().into_iter().collect();
     match jira::tickets_linking(&t.jira_site, &t.jira_email, &keys, range) {
@@ -147,29 +183,32 @@ struct Suggester<'a> {
 }
 
 impl Suggester<'_> {
-    /// An entry that already has a GitHub ticket gets only a Jira key.
+    /// An entry that already has a GitHub ref gets only a Jira key. A Jira key found through a
+    /// GitHub ticket carries that ticket as `via`.
     /// @returns 1 when the entry got the suggestion, 0 when it was dismissed or not a Jira key.
     fn suggest(&self, e: &ReportEntry, picked: &Candidate, reason: &str, by_ai: bool) -> Result<usize> {
-        let (ticket, reason) = match self.jira_key_behind(picked)? {
-            Some(key) => (key, format!("named in {}; {reason}", picked.key)),
+        let via = Some(picked.key.clone());
+        let (ticket, reason, via) = match self.jira_key_behind(picked)? {
+            Some(key) => (key, format!("named in {}; {reason}", picked.key), via),
             None => match self.linked.get(&picked.key) {
-                Some(jira) => (jira.key.clone(), format!("links {} in Jira; {reason}", picked.key)),
-                None => (picked.key.clone(), reason.to_string()),
+                Some(jira) => (jira.key.clone(), format!("links {} in Jira; {reason}", picked.key), via),
+                None => (picked.key.clone(), reason.to_string(), None),
             },
         };
-        if e.ticket.is_some() && tickets::is_github_key(&ticket) {
+        if e.github.is_some() && tickets::is_github_key(&ticket) {
             return Ok(0);
         }
-        let s = StoredSuggestion { ticket, reason, by_ai };
+        let s = StoredSuggestion { ticket, reason, by_ai, via };
         Ok(usize::from(self.store.suggest_ticket(&e.session_ids, &s)? > 0))
     }
 
-    /// For an entry whose GitHub ticket a Jira ticket links, suggests that Jira ticket.
+    /// For an entry whose GitHub ref a Jira ticket links, suggests that Jira ticket.
     /// @returns None when there is no such link, else the count `suggest` returns.
     fn suggest_linked_to_ticket(&self, e: &ReportEntry) -> Result<Option<usize>> {
-        let Some(jira) = e.ticket.as_ref().and_then(|t| self.linked.get(&t.key)) else { return Ok(None) };
-        let reason = format!("links {} in Jira", e.ticket.as_ref().map(|t| t.key.as_str()).unwrap_or_default());
-        let s = StoredSuggestion { ticket: jira.key.clone(), reason, by_ai: false };
+        let Some(github) = &e.github else { return Ok(None) };
+        let Some(jira) = self.linked.get(&github.key) else { return Ok(None) };
+        let reason = format!("links {} in Jira", github.key);
+        let s = StoredSuggestion { ticket: jira.key.clone(), reason, by_ai: false, via: Some(github.key.clone()) };
         Ok(Some(usize::from(self.store.suggest_ticket(&e.session_ids, &s)? > 0)))
     }
 
@@ -187,7 +226,7 @@ impl Suggester<'_> {
         let url = if self.jira_site.is_empty() { c.url.clone() } else { format!("https://{}/browse/{key}", self.jira_site) };
         let known = self.store.ticket_info()?.get(&key).is_some_and(|i| i.tracker == "jira");
         if !known {
-            self.store.save_ticket_info(&[TicketInfo { key: key.clone(), title: c.title.clone(), url, tracker: "jira".into() }])?;
+            self.store.save_ticket_info(&[TicketInfo { key: key.clone(), title: c.title.clone(), url, tracker: "jira".into(), epic: None }])?;
         }
         Ok(Some(key))
     }

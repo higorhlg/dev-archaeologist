@@ -27,20 +27,31 @@ pub struct Candidate {
     /// The last time the ticket changed, or the range end when the tracker says it was the
     /// user's during the range.
     pub last_ms: i64,
+    /// The Jira epic the ticket belongs to.
+    pub epic: Option<Epic>,
 }
 
-/// Title and link of a ticket, kept so the app can show and open it.
+/// A Jira epic: the parent of a ticket one level up.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Epic {
+    pub key: String,
+    pub title: String,
+}
+
+/// Title, link and epic of a ticket, kept so the app can show and open it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TicketInfo {
     pub key: String,
     pub title: String,
     pub url: String,
     pub tracker: String,
+    #[serde(default)]
+    pub epic: Option<Epic>,
 }
 
 impl From<&Candidate> for TicketInfo {
     fn from(c: &Candidate) -> Self {
-        Self { key: c.key.clone(), title: c.title.clone(), url: c.url.clone(), tracker: c.tracker.clone() }
+        Self { key: c.key.clone(), title: c.title.clone(), url: c.url.clone(), tracker: c.tracker.clone(), epic: c.epic.clone() }
     }
 }
 

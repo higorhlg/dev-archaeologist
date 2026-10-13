@@ -121,6 +121,11 @@ fn set_ticket(p: State<Pipeline>, session_ids: Vec<String>, ticket: Option<Strin
 }
 
 #[tauri::command]
+fn set_github_ref(p: State<Pipeline>, session_ids: Vec<String>, github_ref: Option<String>) -> CmdResult<()> {
+    api::set_github_ref(&p, &session_ids, github_ref).map_err(err)
+}
+
+#[tauri::command]
 fn export_toggl_csv(p: State<Pipeline>, query: ReportQuery) -> CmdResult<String> {
     api::export_toggl_csv(&p, &query).map_err(err)
 }
@@ -262,7 +267,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             status, discover, backfill, day, session_events, projects, confirm_session, exclude_session,
             edit_session, generate_journal, confirm_journal, rebuild_day, save_settings, save_api_key,
-            install_shell_hook, report, approve_sessions, approve_confident, set_entry_label, set_ticket,
+            install_shell_hook, report, approve_sessions, approve_confident, set_entry_label, set_ticket, set_github_ref,
             export_toggl_csv, connect_toggl, toggl_projects, send_to_toggl, days_needing_labels, ai_models, report_days, resolve_gap,
             approve_bridges, fill_to_schedule, save_schedule, project_contexts, set_project_context, patch_settings, detect_contexts,
             calendar_status, connect_calendar, reimport_meetings, dismiss_suggestion, tracker_status, connect_jira,

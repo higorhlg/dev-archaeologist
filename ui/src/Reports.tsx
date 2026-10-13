@@ -16,6 +16,8 @@ import {
   type ReportQuery,
   type Status,
   type FindResult,
+  type Ticket,
+  type TicketInfo,
   type TicketMode,
   type TogglProject,
   type TogglProjectInfo,
@@ -260,18 +262,17 @@ type Run = (fn: () => Promise<string | void>) => Promise<void>;
 
 function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; run: Run }) {
   const [label, setLabel] = useState(e.label);
-  const [editingTicket, setEditingTicket] = useState(false);
-  const [ticket, setTicket] = useState(e.ticket?.key ?? "");
+  const [editing, setEditing] = useState<"jira" | "github" | null>(null);
   useEffect(() => setLabel(e.label), [e.label]);
-  useEffect(() => setTicket(e.ticket?.key ?? ""), [e.ticket?.key]);
 
   const single = grouping === "session" && e.session_ids.length === 1;
   const saveLabel = () => {
     if (label.trim() && label !== e.label) run(() => api.setEntryLabel(e.session_ids[0], label.trim()));
   };
   const saveTicket = (value: string | null) => {
-    setEditingTicket(false);
-    run(() => api.setTicket(e.session_ids, value));
+    const slot = editing;
+    setEditing(null);
+    run(() => (slot === "github" ? api.setGithubRef(e.session_ids, value) : api.setTicket(e.session_ids, value)));
   };
 
   return (
@@ -292,25 +293,19 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
       <span className="body">
         <span className="line1">
           <span className="proj" style={{ color: stratum(e.project) }}>{e.toggl_project || "No project"}</span>
-          {editingTicket ? (
-            <span className="ticket-edit">
-              <input autoFocus value={ticket} placeholder="SHOP-1261" onChange={(ev) => setTicket(ev.target.value)}
-                onKeyDown={(ev) => { if (ev.key === "Enter") saveTicket(ticket.trim()); if (ev.key === "Escape") setEditingTicket(false); }} />
-              <button onClick={() => saveTicket(ticket.trim())}>Set</button>
-              <button onClick={() => saveTicket(null)} title="Find the ticket from evidence again">Auto</button>
-            </span>
-          ) : e.ticket ? (
-            <>
-              <button className="ticket" title={`${e.ticket_info?.title ? `${e.ticket_info.title}. ` : ""}Found in ${e.ticket.source}. Click to change.`} onClick={() => setEditingTicket(true)}>
-                {e.ticket.key}
-              </button>
-              {e.ticket_info?.url && <button className="link small" onClick={() => run(() => api.openTicket(e.ticket!.key))}>Open</button>}
-              {e.suggestion && <SuggestionChip e={e} run={run} onOther={() => setEditingTicket(true)} />}
-            </>
+          {editing === "jira" ? (
+            <TicketEditor initial={e.jira?.key ?? ""} placeholder="SHOP-1261 or repo#12" onSave={saveTicket} onCancel={() => setEditing(null)} />
+          ) : e.jira ? (
+            <TicketChip ticket={e.jira} info={e.jira_info} run={run} onEdit={() => setEditing("jira")} />
           ) : e.suggestion ? (
-            <SuggestionChip e={e} run={run} onOther={() => setEditingTicket(true)} />
+            <SuggestionChip e={e} run={run} onOther={() => setEditing("jira")} />
           ) : (
-            <button className="ticket add" onClick={() => setEditingTicket(true)}>Add ticket</button>
+            <button className="ticket add" onClick={() => setEditing("jira")}>{e.github ? "Add Jira ticket" : "Add ticket"}</button>
+          )}
+          {editing === "github" ? (
+            <TicketEditor initial={e.github?.key ?? ""} placeholder="repo#12" onSave={saveTicket} onCancel={() => setEditing(null)} />
+          ) : (
+            e.github && <TicketChip ticket={e.github} info={e.github_info} run={run} onEdit={() => setEditing("github")} />
           )}
           {e.sent && <span className="tag ok">In Toggl</span>}
           {e.context === "personal" && <span className="tag">Personal, not sent to Toggl</span>}
@@ -339,16 +334,51 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
 }
 
 /**
+ * A ticket chip: the key, with the title and epic on hover. Click to change it; "Open" opens it.
+ * @param ticket the Jira ticket or the GitHub ref of an entry.
+ * @param info the stored title, link and epic, when a tracker returned them.
+ */
+function TicketChip({ ticket, info, run, onEdit }: { ticket: Ticket; info: TicketInfo | null; run: Run; onEdit: () => void }) {
+  const github = ticket.key.includes("#");
+  const epic = info?.epic;
+  const title = [info?.title, epic && `Epic ${epic.key}: ${epic.title}`, `Found in ${ticket.source}. Click to change.`].filter(Boolean).join("\n");
+  return (
+    <>
+      <button className={`ticket ${github ? "github" : ""}`} title={title} onClick={onEdit}>{ticket.key}</button>
+      {epic && <span className="tag epic" title={`Epic ${epic.key}`}>{epic.title || epic.key}</span>}
+      {info?.url && <button className="link small" onClick={() => run(() => api.openTicket(ticket.key))}>Open</button>}
+    </>
+  );
+}
+
+/** A key input with Set, Auto (back to detection) and Escape to cancel. */
+function TicketEditor({ initial, placeholder, onSave, onCancel }: {
+  initial: string;
+  placeholder: string;
+  onSave: (value: string | null) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  return (
+    <span className="ticket-edit">
+      <input autoFocus value={value} placeholder={placeholder} onChange={(ev) => setValue(ev.target.value)}
+        onKeyDown={(ev) => { if (ev.key === "Enter") onSave(value.trim()); if (ev.key === "Escape") onCancel(); }} />
+      <button onClick={() => onSave(value.trim())}>Set</button>
+      <button onClick={() => onSave(null)} title="Find it from evidence again">Auto</button>
+    </span>
+  );
+}
+
+/**
  * A ticket "Find tickets" proposed: use it, say no, or type another.
- * Next to a GitHub ticket it is a Jira key that would replace that ticket.
+ * Next to a GitHub ref it is always a Jira key; using it keeps the GitHub ref.
  */
 function SuggestionChip({ e, run, onOther }: { e: ReportEntry; run: Run; onOther: () => void }) {
   const s = e.suggestion!;
-  const replaces = e.ticket ? ` Use replaces ${e.ticket.key}.` : "";
+  const epic = s.info.epic ? `\nEpic ${s.info.epic.key}: ${s.info.epic.title}` : "";
   return (
     <span className="suggestion">
-      {e.ticket && <span className="muted">or</span>}
-      <button className="ticket suggested" title={`Suggested: ${s.reason}.${replaces} Click to open.`} onClick={() => run(() => api.openTicket(s.info.key))}>
+      <button className="ticket suggested" title={`Suggested: ${s.reason}.${epic}\nClick to open.`} onClick={() => run(() => api.openTicket(s.info.key))}>
         {s.info.key}
       </button>
       {s.by_ai && <span className="tag">AI</span>}

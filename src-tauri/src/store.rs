@@ -9,9 +9,32 @@ use serde::{Deserialize, Serialize};
 use crate::corrections::Rule;
 use crate::event::WorkEvent;
 use crate::sessions::{gaps::Gap, Session};
-use crate::trackers::TicketInfo;
+use crate::trackers::{Epic, TicketInfo};
 
 const SCHEMA: &str = include_str!("../migrations/0001_init.sql");
+
+/// Columns added to tables that older databases created without them.
+const ADDED_COLUMNS: [(&str, &str, &str); 3] = [
+    ("ticket_suggestions", "via", "TEXT"),
+    ("ticket_info", "epic_key", "TEXT"),
+    ("ticket_info", "epic_title", "TEXT"),
+];
+
+/// Creates missing tables, then adds each column in `ADDED_COLUMNS` a table lacks.
+fn migrate(conn: &Connection) -> Result<()> {
+    conn.execute_batch(SCHEMA)?;
+    for (table, column, decl) in ADDED_COLUMNS {
+        let exists: bool = conn.query_row(
+            &format!("SELECT COUNT(*) > 0 FROM pragma_table_info('{table}') WHERE name = ?1"),
+            [column],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"))?;
+        }
+    }
+    Ok(())
+}
 
 /// The one local database. Every collector writes through `insert_events`; the UI reads here.
 #[derive(Clone)]
@@ -49,6 +72,8 @@ pub struct StoredSuggestion {
     pub ticket: String,
     pub reason: String,
     pub by_ai: bool,
+    /// The GitHub ref that led to this Jira ticket. Using the suggestion keeps it as the GitHub ref.
+    pub via: Option<String>,
 }
 
 pub fn default_db_path() -> PathBuf {
@@ -102,13 +127,13 @@ impl Store {
         }
         let conn = Connection::open(path).with_context(|| format!("open {}", path.display()))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
@@ -376,12 +401,31 @@ impl Store {
         Ok(())
     }
 
-    /// Titles and links of tickets the trackers returned, keyed by ticket.
+    /// GitHub refs the user set by hand, keyed by session id. An empty ref means "none".
+    pub fn github_ref_overrides(&self) -> Result<std::collections::HashMap<String, String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT session_id, ref FROM github_ref_overrides")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// @param github_ref `Some("")` pins "no GitHub ref"; `None` removes the override so detection runs again.
+    pub fn set_github_ref_override(&self, session_id: &str, github_ref: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        match github_ref {
+            Some(r) => conn.execute("INSERT OR REPLACE INTO github_ref_overrides VALUES (?1, ?2)", params![session_id, r.trim()])?,
+            None => conn.execute("DELETE FROM github_ref_overrides WHERE session_id = ?1", [session_id])?,
+        };
+        Ok(())
+    }
+
+    /// Titles, links and epics of tickets the trackers returned, keyed by ticket.
     pub fn ticket_info(&self) -> Result<std::collections::HashMap<String, TicketInfo>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT ticket, title, url, tracker FROM ticket_info")?;
+        let mut stmt = conn.prepare("SELECT ticket, title, url, tracker, epic_key, epic_title FROM ticket_info")?;
         let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, TicketInfo { key: r.get(0)?, title: r.get(1)?, url: r.get(2)?, tracker: r.get(3)? }))
+            let epic = r.get::<_, Option<String>>(4)?.map(|key| Epic { key, title: r.get::<_, Option<String>>(5).ok().flatten().unwrap_or_default() });
+            Ok((r.get::<_, String>(0)?, TicketInfo { key: r.get(0)?, title: r.get(1)?, url: r.get(2)?, tracker: r.get(3)?, epic }))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -391,7 +435,12 @@ impl Store {
         let tx = conn.transaction()?;
         let now = Utc::now().timestamp_millis();
         for t in tickets {
-            tx.execute("INSERT OR REPLACE INTO ticket_info VALUES (?1, ?2, ?3, ?4, ?5)", params![t.key, t.title, t.url, t.tracker, now])?;
+            let (epic_key, epic_title) = t.epic.as_ref().map(|e| (e.key.as_str(), e.title.as_str())).unzip();
+            tx.execute(
+                "INSERT OR REPLACE INTO ticket_info (ticket, title, url, tracker, fetched_at, epic_key, epic_title)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![t.key, t.title, t.url, t.tracker, now, epic_key, epic_title],
+            )?;
         }
         tx.commit()?;
         Ok(())
@@ -400,9 +449,10 @@ impl Store {
     /// Open suggestions keyed by session id. Dismissed ones are left out.
     pub fn ticket_suggestions(&self) -> Result<std::collections::HashMap<String, StoredSuggestion>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT session_id, ticket, reason, by_ai FROM ticket_suggestions WHERE dismissed = 0")?;
+        let mut stmt = conn.prepare("SELECT session_id, ticket, reason, by_ai, via FROM ticket_suggestions WHERE dismissed = 0")?;
         let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, StoredSuggestion { ticket: r.get(1)?, reason: r.get(2)?, by_ai: r.get::<_, i64>(3)? == 1 }))
+            let s = StoredSuggestion { ticket: r.get(1)?, reason: r.get(2)?, by_ai: r.get::<_, i64>(3)? == 1, via: r.get(4)? };
+            Ok((r.get::<_, String>(0)?, s))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -414,10 +464,10 @@ impl Store {
         let mut n = 0;
         for id in session_ids {
             n += conn.execute(
-                "INSERT INTO ticket_suggestions (session_id, ticket, reason, by_ai) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(session_id) DO UPDATE SET ticket = ?2, reason = ?3, by_ai = ?4, dismissed = 0
+                "INSERT INTO ticket_suggestions (session_id, ticket, reason, by_ai, via) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(session_id) DO UPDATE SET ticket = ?2, reason = ?3, by_ai = ?4, via = ?5, dismissed = 0
                  WHERE NOT (ticket_suggestions.ticket = ?2 AND ticket_suggestions.dismissed = 1)",
-                params![id, s.ticket, s.reason, s.by_ai as i64],
+                params![id, s.ticket, s.reason, s.by_ai as i64, s.via],
             )?;
         }
         Ok(n)

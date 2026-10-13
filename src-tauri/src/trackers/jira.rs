@@ -8,13 +8,15 @@ use chrono::DateTime;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::{Candidate, DayRange};
+use super::{Candidate, DayRange, Epic};
 use crate::http::{self, KeychainItem};
 
 const TOKEN: KeychainItem = KeychainItem("jira-api-token");
 /// Where Atlassian users create API tokens. "Sign in" opens this page in the browser.
 pub const TOKEN_PAGE: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
 const MAX_PAGES: usize = 3;
+/// Issue fields every search asks for. `parent` carries the epic.
+const FIELDS: [&str; 4] = ["summary", "created", "updated", "parent"];
 const PAGE_SIZE: usize = 100;
 /// GitHub tickets looked up per run; each one is a Jira search.
 const MAX_LINK_LOOKUPS: usize = 25;
@@ -89,8 +91,34 @@ fn to_candidate(site: &str, issue: &Value, range_end_ms: i64) -> Option<Candidat
         repo: None,
         created_ms: parse_time(&f["created"]).unwrap_or(0),
         last_ms: parse_time(&f["updated"]).unwrap_or(range_end_ms).max(range_end_ms),
+        epic: epic_of(&f["parent"]),
         key,
     })
+}
+
+/// The parent of an issue when it is an epic (hierarchy level 1). A sub-task's parent is a
+/// story, not an epic, so it gives none.
+fn epic_of(parent: &Value) -> Option<Epic> {
+    let kind = &parent["fields"]["issuetype"];
+    let is_epic = kind["hierarchyLevel"].as_i64() == Some(1) || kind["name"].as_str() == Some("Epic");
+    if !is_epic {
+        return None;
+    }
+    Some(Epic { key: parent["key"].as_str()?.to_string(), title: parent["fields"]["summary"].as_str().unwrap_or_default().to_string() })
+}
+
+/// Title, link and epic of each Jira key, in batches of `PAGE_SIZE`. Keys Jira does not know are left out.
+pub fn tickets_by_key(site: &str, email: &str, keys: &[String], range: &DayRange) -> Result<Vec<Candidate>> {
+    let token = TOKEN.get().ok_or_else(|| anyhow!("Connect Jira in Sources first"))?;
+    let mut out = Vec::new();
+    for batch in keys.chunks(PAGE_SIZE) {
+        let jql = format!("key in ({})", batch.join(", "));
+        let body = json!({"jql": jql, "fields": FIELDS, "maxResults": PAGE_SIZE});
+        let page = post(site, email, &token, "/rest/api/3/search/jql", &body)?;
+        let issues = page["issues"].as_array().cloned().unwrap_or_default();
+        out.extend(issues.iter().filter_map(|i| to_candidate(site, i, range.end_ms())));
+    }
+    Ok(out)
 }
 
 /// The user's tickets for the range, newest first, up to three pages.
@@ -99,7 +127,7 @@ pub fn search(site: &str, email: &str, range: &DayRange) -> Result<Vec<Candidate
     let mut out = Vec::new();
     let mut next: Option<String> = None;
     for _ in 0..MAX_PAGES {
-        let mut body = json!({"jql": jql(range), "fields": ["summary", "created", "updated"], "maxResults": PAGE_SIZE});
+        let mut body = json!({"jql": jql(range), "fields": FIELDS, "maxResults": PAGE_SIZE});
         if let Some(t) = &next {
             body["nextPageToken"] = json!(t);
         }
@@ -132,7 +160,7 @@ pub fn tickets_linking(site: &str, email: &str, github_keys: &[String], range: &
     let mut out = HashMap::new();
     for key in github_keys.iter().take(MAX_LINK_LOOKUPS) {
         let Some(jql) = link_jql(key) else { continue };
-        let body = json!({"jql": jql, "fields": ["summary", "created", "updated"], "maxResults": 1});
+        let body = json!({"jql": jql, "fields": FIELDS, "maxResults": 1});
         let page = post(site, email, &token, "/rest/api/3/search/jql", &body)?;
         let first = page["issues"].as_array().and_then(|a| a.first()).and_then(|i| to_candidate(site, i, range.end_ms()));
         if let Some(c) = first {
@@ -156,6 +184,15 @@ mod tests {
 
     fn day(d: &str) -> NaiveDate {
         NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn only_an_epic_parent_is_an_epic() {
+        let epic = json!({"key": "SHOP-640", "fields": {"summary": "Warehouse EU Setup", "issuetype": {"name": "Epic", "hierarchyLevel": 1}}});
+        assert_eq!(epic_of(&epic), Some(Epic { key: "SHOP-640".into(), title: "Warehouse EU Setup".into() }));
+        let story = json!({"key": "SHOP-1", "fields": {"summary": "s", "issuetype": {"name": "Story", "hierarchyLevel": 0}}});
+        assert_eq!(epic_of(&story), None);
+        assert_eq!(epic_of(&Value::Null), None);
     }
 
     #[test]

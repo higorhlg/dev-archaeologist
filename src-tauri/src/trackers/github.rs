@@ -67,7 +67,32 @@ fn to_candidate(item: &Value) -> Option<Candidate> {
         repo: Some(slug),
         created_ms: created,
         last_ms: last,
+        epic: None,
     })
+}
+
+fn get_json(token: &str, url: &str) -> Result<Value> {
+    let resp = http::agent(30)
+        .get(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("User-Agent", "dev-archaeologist")
+        .call()?;
+    http::read_json(resp, "GitHub")
+}
+
+/// One issue or pull request by `owner/name` and number, through the first `gh` account that can read it.
+pub fn ticket(slug: &str, number: &str) -> Result<Candidate> {
+    let url = format!("{API}/repos/{slug}/issues/{number}");
+    let mut last_err = anyhow::anyhow!("gh is not signed in");
+    for login in accounts() {
+        match token_for(&login).and_then(|t| get_json(&t, &url)) {
+            Ok(item) => return to_candidate(&item).ok_or_else(|| anyhow::anyhow!("GitHub returned no issue for {slug}#{number}")),
+            Err(err) => last_err = err,
+        }
+    }
+    Err(last_err)
 }
 
 fn search_page(token: &str, query: &str, page: usize) -> Result<Value> {

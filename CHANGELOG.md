@@ -5,6 +5,22 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.9.0] - 2026-10-13
+
+### Added
+- Jira ticket and GitHub ref are separate on each report entry. Each has its own chip, is
+  found from evidence on its own, and can be set by hand. Toggl files the entry under the
+  Jira ticket, or under the GitHub ref when there is no Jira ticket.
+- Epics: Jira tickets carry their parent epic. Reports shows it next to the ticket and in
+  the ticket's hover text.
+- Hover text on both chips shows the ticket title. Find tickets fetches the title and epic
+  of every Jira ticket in the report, and the title of each GitHub ref it has not seen.
+
+### Changed
+- Using a Jira suggestion keeps the GitHub ref it came through (a PR naming the key, or a
+  PR the Jira ticket links), and a GitHub key stored as the ticket moves to the GitHub ref.
+- Typing a `repo#N` key in the ticket box sets the GitHub ref.
+
 ## [0.8.2] - 2026-10-13
 
 ### Added

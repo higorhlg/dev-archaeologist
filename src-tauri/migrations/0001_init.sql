@@ -94,7 +94,13 @@ CREATE TABLE IF NOT EXISTS ticket_suggestions (
   ticket     TEXT NOT NULL,
   reason     TEXT NOT NULL,               -- why the ticket fits, shown to the user
   by_ai      INTEGER NOT NULL DEFAULT 0,  -- 1 when the AI tie-break picked it
-  dismissed  INTEGER NOT NULL DEFAULT 0   -- 1 when the user said no; the same ticket is never suggested again
+  dismissed  INTEGER NOT NULL DEFAULT 0,  -- 1 when the user said no; the same ticket is never suggested again
+  via        TEXT                         -- the GitHub ref that led to a Jira ticket; kept as the GitHub ref on use
+);
+
+CREATE TABLE IF NOT EXISTS github_ref_overrides (
+  session_id TEXT PRIMARY KEY,
+  ref        TEXT NOT NULL                -- insight-ui#128; '' means "this session has no GitHub ref"
 );
 
 CREATE TABLE IF NOT EXISTS ticket_info (
@@ -102,5 +108,7 @@ CREATE TABLE IF NOT EXISTS ticket_info (
   title      TEXT NOT NULL,
   url        TEXT NOT NULL,
   tracker    TEXT NOT NULL,               -- jira | github
-  fetched_at INTEGER NOT NULL
+  fetched_at INTEGER NOT NULL,
+  epic_key   TEXT,                        -- the Jira epic the ticket belongs to
+  epic_title TEXT
 );

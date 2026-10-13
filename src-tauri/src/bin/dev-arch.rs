@@ -88,7 +88,8 @@ fn main() -> Result<()> {
             let r = api::report(&p, &q)?;
             println!("{} min total · {} approved · {} to review · prefixes {:?}", r.total_min, r.approved_min, r.review_count, r.known_prefixes);
             for e in &r.entries {
-                let t = e.ticket.as_ref().map(|t| format!("{} ({})", t.key, t.source)).unwrap_or_else(|| "-".into());
+                let t = [&e.jira, &e.github].into_iter().flatten().map(|t| format!("{} ({})", t.key, t.source)).collect::<Vec<_>>().join(" ");
+                let t = if t.is_empty() { "-".to_string() } else { t };
                 println!("  {} {:>4}m  {:<22} {:<28} {}", e.day, e.duration_min, e.toggl_project, t, devarch::event::clip(&e.label, 70));
             }
         }

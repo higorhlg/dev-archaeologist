@@ -124,7 +124,8 @@ export type TrackerStatus = {
 };
 export type JiraAccount = { display_name: string; email: string };
 export type FindResult = { checked: number; suggested: number; by_ai: number; looked_in: string[]; errors: string[] };
-export type TicketInfo = { key: string; title: string; url: string; tracker: string };
+export type Epic = { key: string; title: string };
+export type TicketInfo = { key: string; title: string; url: string; tracker: string; epic: Epic | null };
 export type Suggestion = { info: TicketInfo; reason: string; by_ai: boolean };
 
 export type Status = {
@@ -151,8 +152,12 @@ export type ReportEntry = {
   label: string;
   description: string;
   tags: string[];
-  ticket: Ticket | null;
-  ticket_info: TicketInfo | null;
+  /** The Jira ticket; the entry is filed under it in Toggl. */
+  jira: Ticket | null;
+  jira_info: TicketInfo | null;
+  /** The GitHub issue or pull request; filed under only when there is no Jira ticket. */
+  github: Ticket | null;
+  github_info: TicketInfo | null;
   suggestion: Suggestion | null;
   session_ids: string[];
   approved: boolean;
@@ -218,7 +223,9 @@ export const api = {
   approveSessions: (ids: string[]) => invoke<void>("approve_sessions", { ids }),
   approveConfident: (query: ReportQuery) => invoke<number>("approve_confident", { query }),
   setEntryLabel: (sessionId: string, label: string) => invoke<void>("set_entry_label", { sessionId, label }),
+  /** Sets the Jira ticket; a `repo#N` key sets the GitHub ref. `null` goes back to detection. */
   setTicket: (sessionIds: string[], ticket: string | null) => invoke<void>("set_ticket", { sessionIds, ticket }),
+  setGithubRef: (sessionIds: string[], githubRef: string | null) => invoke<void>("set_github_ref", { sessionIds, githubRef }),
   exportTogglCsv: (query: ReportQuery) => invoke<string>("export_toggl_csv", { query }),
   connectToggl: (token: string) => invoke<TogglAccount>("connect_toggl", { token }),
   togglProjects: () => invoke<TogglProjectInfo[]>("toggl_projects"),

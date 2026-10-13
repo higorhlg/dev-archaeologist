@@ -79,10 +79,14 @@ pub struct ReportEntry {
     pub label: String,
     pub description: String,
     pub tags: Vec<String>,
-    pub ticket: Option<Ticket>,
-    /// Title and link of the ticket, when a tracker returned it.
-    pub ticket_info: Option<TicketInfo>,
-    /// A ticket "Find tickets" proposed. Only on entries without a ticket.
+    /// The Jira ticket. The entry is filed under it in Toggl.
+    pub jira: Option<Ticket>,
+    /// Title, link and epic of the Jira ticket, when Jira returned them.
+    pub jira_info: Option<TicketInfo>,
+    /// The GitHub issue or pull request. The entry is filed under it only when there is no Jira ticket.
+    pub github: Option<Ticket>,
+    pub github_info: Option<TicketInfo>,
+    /// A ticket "Find tickets" proposed. Only on entries without a Jira ticket.
     pub suggestion: Option<Suggestion>,
     pub session_ids: Vec<String>,
     /// Every session in the entry is confirmed.
@@ -114,7 +118,7 @@ struct TicketLookups {
 
 impl TicketLookups {
     fn info_for(&self, key: &str) -> TicketInfo {
-        self.info.get(key).cloned().unwrap_or_else(|| TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: String::new() })
+        self.info.get(key).cloned().unwrap_or_else(|| TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: String::new(), epic: None })
     }
 
     fn suggestion_for(&self, session_ids: &[String]) -> Option<Suggestion> {
@@ -148,7 +152,8 @@ const PREFIX_HISTORY_DAYS: i64 = 90;
 
 struct Loaded {
     session: Session,
-    ticket: Option<Ticket>,
+    jira: Option<Ticket>,
+    github: Option<Ticket>,
     /// The session's minutes after overlapping sessions on the same day share their minutes.
     report_min: i64,
     /// Gap minutes that count: at-computer time and approved bridges aimed at this session.
@@ -156,6 +161,35 @@ struct Loaded {
     /// Bridged minutes aimed at this session that still wait for approval.
     pending_min: i64,
     context: Context,
+}
+
+impl Loaded {
+    /// The key Toggl files the session under: the Jira ticket, else the GitHub ref.
+    fn filed_under(&self) -> Option<&Ticket> {
+        self.jira.as_ref().or(self.github.as_ref())
+    }
+}
+
+/// The session's Jira ticket and GitHub ref, each from the user's choice when there is one,
+/// else from the evidence. A GitHub key in `ticket_overrides` counts as the GitHub ref.
+fn resolve_tickets(
+    session_id: &str,
+    detected: tickets::Detected,
+    overrides: &std::collections::HashMap<String, String>,
+    github_overrides: &std::collections::HashMap<String, String>,
+) -> (Option<Ticket>, Option<Ticket>) {
+    let chosen = |key: &String| (!key.is_empty()).then(|| Ticket { key: key.clone(), source: "you".into() });
+    let ticket_override = overrides.get(session_id);
+    let jira = match ticket_override {
+        Some(key) if !tickets::is_github_key(key) => chosen(key),
+        _ => detected.jira,
+    };
+    let github = match (github_overrides.get(session_id), ticket_override) {
+        (Some(key), _) => chosen(key),
+        (None, Some(key)) if tickets::is_github_key(key) => chosen(key),
+        _ => detected.github,
+    };
+    (jira, github)
 }
 
 fn parse_day(d: &str) -> Result<NaiveDate> {
@@ -168,18 +202,16 @@ fn load(store: &Store, q: &ReportQuery) -> Result<(Vec<Loaded>, BTreeSet<String>
     let history = store.events_between((from - Duration::days(PREFIX_HISTORY_DAYS)).timestamp_millis(), to.timestamp_millis())?;
     let prefixes = tickets::known_prefixes(&history);
     let overrides = store.ticket_overrides()?;
+    let github_overrides = store.github_ref_overrides()?;
     let rules = Settings::load(store)?.contexts;
     let samples = store.project_sample_paths()?;
     let mut out: Vec<(Loaded, Vec<WorkEvent>)> = Vec::new();
     for session in store.sessions_between_days(&q.from, &q.to)? {
         let events = store.events_by_ids(&store.session_event_ids(&session.id)?)?;
-        let ticket = match overrides.get(&session.id) {
-            Some(key) if key.is_empty() => None,
-            Some(key) => Some(Ticket { key: key.clone(), source: "you".into() }),
-            None => tickets::detect(&events, session.branch.as_deref(), session.project.as_deref(), &prefixes),
-        };
+        let detected = tickets::detect(&events, session.branch.as_deref(), session.project.as_deref(), &prefixes);
+        let (jira, github) = resolve_tickets(&session.id, detected, &overrides, &github_overrides);
         let context = rules.resolve(session.project.as_deref().unwrap_or(""), samples.get(session.project.as_deref().unwrap_or("")).map(String::as_str));
-        out.push((Loaded { session, ticket, report_min: 0, gap_min: 0, pending_min: 0, context }, events));
+        out.push((Loaded { session, jira, github, report_min: 0, gap_min: 0, pending_min: 0, context }, events));
     }
     share_parallel_minutes(&mut out);
     add_gap_minutes(&mut out, &store.gaps_between_days(&q.from, &q.to)?);
@@ -232,7 +264,7 @@ fn add_gap_minutes(loaded: &mut [(Loaded, Vec<WorkEvent>)], gaps: &[Gap]) {
 
 fn group_key(l: &Loaded, g: Grouping) -> String {
     let project = l.session.project.as_deref().unwrap_or("-");
-    match (g, &l.ticket) {
+    match (g, l.filed_under()) {
         (Grouping::Session, _) => l.session.id.clone(),
         (Grouping::TicketDay, Some(t)) => format!("{}|{}", l.session.day, t.key),
         (Grouping::TicketDay, None) | (Grouping::ProjectDay, _) => format!("{}|{project}", l.session.day),
@@ -290,9 +322,10 @@ fn build_entry(key: String, group: Vec<&Loaded>, cx: &EntryContext) -> ReportEnt
     let first = group.iter().min_by_key(|l| l.session.start_ts).unwrap();
     let project = first.session.project.clone();
     let map = mapping(settings, project.as_deref());
-    let ticket = group.iter().find_map(|l| l.ticket.clone());
+    let jira = group.iter().find_map(|l| l.jira.clone());
+    let github = group.iter().find_map(|l| l.github.clone());
     let label = joined_labels(&group);
-    let (description, tags) = match (&ticket, q.tickets) {
+    let (description, tags) = match (jira.as_ref().or(github.as_ref()), q.tickets) {
         (Some(t), TicketMode::Prefix) => (format!("{} · {label}", t.key), vec![]),
         (Some(t), TicketMode::Tag) => (label.clone(), vec![t.key.clone()]),
         _ => (label.clone(), vec![]),
@@ -300,11 +333,12 @@ fn build_entry(key: String, group: Vec<&Loaded>, cx: &EntryContext) -> ReportEnt
     let reasons = review_reasons(&group);
     let session_ids: Vec<String> = group.iter().map(|l| l.session.id.clone()).collect();
     ReportEntry {
-        ticket_info: ticket.as_ref().and_then(|t| lookups.info.get(&t.key).cloned()),
-        suggestion: match &ticket {
-            None => lookups.suggestion_for(&session_ids),
-            Some(t) if tickets::is_github_key(&t.key) => lookups.suggestion_for(&session_ids).filter(|s| !tickets::is_github_key(&s.info.key)),
-            Some(_) => None,
+        jira_info: jira.as_ref().and_then(|t| lookups.info.get(&t.key).cloned()),
+        github_info: github.as_ref().and_then(|t| lookups.info.get(&t.key).cloned()),
+        suggestion: match (&jira, &github) {
+            (Some(_), _) => None,
+            (None, None) => lookups.suggestion_for(&session_ids),
+            (None, Some(_)) => lookups.suggestion_for(&session_ids).filter(|s| !tickets::is_github_key(&s.info.key)),
         },
         day: first.session.day.clone(),
         start_ts: first.session.start_ts,
@@ -325,7 +359,8 @@ fn build_entry(key: String, group: Vec<&Loaded>, cx: &EntryContext) -> ReportEnt
         label,
         description,
         tags,
-        ticket,
+        jira,
+        github,
         reasons,
     }
 }
