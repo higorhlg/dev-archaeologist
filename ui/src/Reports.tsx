@@ -123,7 +123,7 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
     run(async () => findSummary(await api.findTickets(query))).finally(() => setFinding(false));
   };
 
-  const suggested = (report?.entries ?? []).filter((e) => e.suggestion && !e.ticket);
+  const suggested = (report?.entries ?? []).filter((e) => e.suggestion);
   const acceptAll = () =>
     run(async () => {
       for (const e of suggested) await api.setTicket(e.session_ids, e.suggestion!.info.key);
@@ -305,6 +305,7 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
                 {e.ticket.key}
               </button>
               {e.ticket_info?.url && <button className="link small" onClick={() => run(() => api.openTicket(e.ticket!.key))}>Open</button>}
+              {e.suggestion && <SuggestionChip e={e} run={run} onOther={() => setEditingTicket(true)} />}
             </>
           ) : e.suggestion ? (
             <SuggestionChip e={e} run={run} onOther={() => setEditingTicket(true)} />
@@ -337,12 +338,17 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
   );
 }
 
-/** A ticket "Find tickets" proposed: use it, say no, or type another. */
+/**
+ * A ticket "Find tickets" proposed: use it, say no, or type another.
+ * Next to a guessed GitHub ticket it is a Jira key that would replace that ticket.
+ */
 function SuggestionChip({ e, run, onOther }: { e: ReportEntry; run: Run; onOther: () => void }) {
   const s = e.suggestion!;
+  const replaces = e.ticket ? ` Use replaces ${e.ticket.key}.` : "";
   return (
     <span className="suggestion">
-      <button className="ticket suggested" title={`Suggested: ${s.reason}. Click to open.`} onClick={() => run(() => api.openTicket(s.info.key))}>
+      {e.ticket && <span className="muted">or</span>}
+      <button className="ticket suggested" title={`Suggested: ${s.reason}.${replaces} Click to open.`} onClick={() => run(() => api.openTicket(s.info.key))}>
         {s.info.key}
       </button>
       {s.by_ai && <span className="tag">AI</span>}

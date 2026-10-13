@@ -52,6 +52,32 @@ impl Pipeline {
 
     /// Re-groups one local day into sessions and re-runs the achievement rules.
     /// Sessions the user edited, confirmed or excluded stay as they are.
+    /// Stores the user's commits from a git scan and removes events stored earlier for commits
+    /// the scan found are not work. Days that lose an event are rebuilt.
+    /// @returns the number of new events.
+    pub fn ingest_git(&self, scan: crate::adapters::git::Scan) -> Result<usize> {
+        let n = self.ingest(scan.events)?;
+        let removed = self.store.forget_events(crate::adapters::git::SOURCE, &scan.not_work)?;
+        self.rebuild_days_of(&removed)?;
+        Ok(n)
+    }
+
+    /// Removes stored stash commits, which are not work, and rebuilds the days that held them.
+    pub fn forget_stash_commits(&self) -> Result<()> {
+        let removed = self.store.forget_stash_commits()?;
+        self.rebuild_days_of(&removed)
+    }
+
+    /// Rebuilds each local day that holds one of the timestamps (unix ms).
+    fn rebuild_days_of(&self, timestamps: &[i64]) -> Result<()> {
+        let days: std::collections::BTreeSet<NaiveDate> =
+            timestamps.iter().filter_map(|ms| Local.timestamp_millis_opt(*ms).single()).map(|t| t.date_naive()).collect();
+        for day in days {
+            self.rebuild_day(day)?;
+        }
+        Ok(())
+    }
+
     pub fn rebuild_day(&self, day: NaiveDate) -> Result<usize> {
         let (start, end) = day_bounds(day);
         let events = self.store.events_between(start.timestamp_millis(), end.timestamp_millis())?;

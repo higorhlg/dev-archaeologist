@@ -253,6 +253,9 @@ async fn find_tickets(p: State<'_, Pipeline>, query: ReportQuery) -> CmdResult<d
 fn main() {
     let store = Store::open(&default_db_path()).expect("open the local database");
     let pipeline = Pipeline::new(store);
+    if let Err(e) = pipeline.forget_stash_commits() {
+        eprintln!("could not remove stored stash commits: {e:#}");
+    }
     devarch::daemon::start(pipeline.clone()).expect("start the collectors");
     tauri::Builder::default()
         .manage(pipeline)

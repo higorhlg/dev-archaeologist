@@ -5,6 +5,21 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.8.1] - 2026-10-13
+
+### Changed
+- Find tickets tries Jira first: Jira tickets, and pull requests whose title names a Jira
+  key. A plain GitHub issue or pull request is suggested only when no Jira ticket fits, or
+  when the work names it and the Jira tickets are only a close call.
+- Find tickets also checks entries whose ticket is a GitHub issue or pull request the app
+  guessed, and offers a Jira key next to it. "Use" replaces the guessed ticket.
+
+### Fixed
+- Commits GitHub made when it merged a pull request (committer `noreply@github.com`) no
+  longer count as work on the day they were fetched, and no longer give a session their
+  `(#N)` ticket. Stash commits ("WIP on", "index on") are not counted either. Ones stored
+  earlier are removed and their days rebuilt.
+
 ## [0.8.0] - 2026-10-12
 
 ### Added

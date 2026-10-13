@@ -83,8 +83,8 @@ fn poll_once(pipeline: &Pipeline, tail: &mut AgentTail, since: chrono::DateTime<
     }
     if settings.sources.git {
         for repo in repos_to_scan(&settings, &dirs) {
-            if let Ok(events) = git::scan(&repo, since) {
-                pipeline.ingest(events)?;
+            if let Ok(scan) = git::scan(&repo, since) {
+                pipeline.ingest_git(scan)?;
             }
         }
     }

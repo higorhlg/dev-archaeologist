@@ -112,6 +112,43 @@ impl Store {
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
+    /// Deletes stored events by `(source, source_id)`, with their links to sessions.
+    /// @returns the timestamps (unix ms) of the deleted events, so their days can be rebuilt.
+    pub fn forget_events(&self, source: &str, source_ids: &[String]) -> Result<Vec<i64>> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut deleted = Vec::new();
+        {
+            let mut find = tx.prepare_cached("SELECT id, ts FROM work_events WHERE source = ?1 AND source_id = ?2")?;
+            let mut unlink = tx.prepare_cached("DELETE FROM session_events WHERE event_id = ?1")?;
+            let mut delete = tx.prepare_cached("DELETE FROM work_events WHERE id = ?1")?;
+            for sid in source_ids {
+                let found: Option<(String, i64)> =
+                    find.query_row(params![source, sid], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+                if let Some((id, ts)) = found {
+                    unlink.execute(params![id])?;
+                    delete.execute(params![id])?;
+                    deleted.push(ts);
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(deleted)
+    }
+
+    /// Deletes stored git commits whose subject is one `git stash` gives, with their links to sessions.
+    /// @returns the timestamps (unix ms) of the deleted events, so their days can be rebuilt.
+    pub fn forget_stash_commits(&self) -> Result<Vec<i64>> {
+        let ids: Vec<String> = {
+            let conn = self.conn.lock().unwrap();
+            let like = crate::adapters::git::STASH_SUBJECT_PREFIXES.iter().map(|_| "detail LIKE ? || '%'").collect::<Vec<_>>().join(" OR ");
+            let mut stmt = conn.prepare(&format!("SELECT source_id FROM work_events WHERE source = 'git' AND kind = 'commit_created' AND ({like})"))?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(crate::adapters::git::STASH_SUBJECT_PREFIXES), |r| r.get(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        self.forget_events(crate::adapters::git::SOURCE, &ids)
+    }
+
     /// Inserts events and skips any `(source, source_id)` already stored.
     /// @returns the number of new rows.
     pub fn insert_events(&self, events: &[WorkEvent]) -> Result<usize> {

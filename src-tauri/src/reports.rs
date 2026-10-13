@@ -301,7 +301,11 @@ fn build_entry(key: String, group: Vec<&Loaded>, cx: &EntryContext) -> ReportEnt
     let session_ids: Vec<String> = group.iter().map(|l| l.session.id.clone()).collect();
     ReportEntry {
         ticket_info: ticket.as_ref().and_then(|t| lookups.info.get(&t.key).cloned()),
-        suggestion: if ticket.is_none() { lookups.suggestion_for(&session_ids) } else { None },
+        suggestion: match &ticket {
+            None => lookups.suggestion_for(&session_ids),
+            Some(t) if t.yields_to_jira() => lookups.suggestion_for(&session_ids).filter(|s| !tickets::is_github_key(&s.info.key)),
+            Some(_) => None,
+        },
         day: first.session.day.clone(),
         start_ts: first.session.start_ts,
         duration_min: group.iter().map(|l| l.report_min + l.gap_min).sum(),

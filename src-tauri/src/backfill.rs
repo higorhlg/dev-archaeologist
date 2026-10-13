@@ -73,10 +73,11 @@ pub fn backfill(pipeline: &Pipeline, since: DateTime<Utc>) -> Result<BackfillRep
     report.claude_code = pipeline.ingest(cc)?;
     report.codex = pipeline.ingest(cx)?;
     for repo in repos_to_scan(&settings, &agent_dirs) {
-        if let Ok(events) = git::scan(&repo, since) {
-            report.git += pipeline.ingest(events)?;
+        if let Ok(scan) = git::scan(&repo, since) {
+            report.git += pipeline.ingest_git(scan)?;
         }
     }
+    pipeline.forget_stash_commits()?;
     report.meetings = import_meetings(pipeline, since)?;
     report.sessions = pipeline.rebuild_range(since, Utc::now())?;
     let mut s = Settings::load(&pipeline.store)?;

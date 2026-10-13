@@ -51,6 +51,26 @@ fn user_emails(repo: &Path) -> HashSet<String> {
     set
 }
 
+/// Commits a scan read, split into the user's own work and commits it must not count.
+pub struct Scan {
+    pub events: Vec<WorkEvent>,
+    /// Shas of the user's commits that are not local work: stash entries, and commits GitHub
+    /// made when it merged a pull request. Events stored for them earlier must be removed.
+    pub not_work: Vec<String>,
+}
+
+/// GitHub is the committer of squash and rebase merges done on the website.
+const GITHUB_COMMITTER: &str = "noreply@github.com";
+
+/// Subjects git gives the commits of a stash entry.
+pub const STASH_SUBJECT_PREFIXES: [&str; 3] = ["WIP on ", "index on ", "untracked files on "];
+
+/// True for the subject of a commit `git stash` made. Dropped stashes leave the ref, so the
+/// subject is the one sign left.
+fn is_stash_subject(subject: &str) -> bool {
+    STASH_SUBJECT_PREFIXES.iter().any(|p| subject.starts_with(p))
+}
+
 struct Commit {
     sha: String,
     ts: DateTime<Utc>,
@@ -62,31 +82,52 @@ struct Commit {
 }
 
 /// Reads the user's commits since `since` on every branch, with line counts.
+/// Commits by other authors are left out. Stash entries and commits GitHub made on a merge
+/// go to `not_work`, because the work in them happened earlier or is not a commit.
 /// The commit subject is kept; diffs are read only to count changed characters on one-line commits.
-pub fn scan(repo: &Path, since: DateTime<Utc>) -> Result<Vec<WorkEvent>> {
+pub fn scan(repo: &Path, since: DateTime<Utc>) -> Result<Scan> {
     let emails = user_emails(repo);
     let log = git(
         repo,
         &[
             "log", "--all", "--source", "--no-merges", &format!("--since=@{}", since.timestamp()),
-            "--format=%x1e%H%x1f%at%x1f%ae%x1f%S%x1f%s", "--numstat",
+            "--format=%x1e%H%x1f%at%x1f%ae%x1f%S%x1f%ce%x1f%s", "--numstat",
         ],
     )?;
-    let mut out = Vec::new();
+    let mut scan = Scan { events: Vec::new(), not_work: Vec::new() };
     for chunk in log.split('\x1e').filter(|c| !c.trim().is_empty()) {
-        let Some((commit, email)) = parse_commit(chunk) else { continue };
-        if !emails.is_empty() && !emails.contains(&email) {
+        let Some(parsed) = parse_commit(chunk) else { continue };
+        if !emails.is_empty() && !emails.contains(&parsed.author) {
             continue;
         }
-        out.push(commit_event(repo, commit));
+        if parsed.is_work() {
+            scan.events.push(commit_event(repo, parsed.commit));
+        } else {
+            scan.not_work.push(parsed.commit.sha);
+        }
     }
-    Ok(out)
+    Ok(scan)
 }
 
-fn parse_commit(chunk: &str) -> Option<(Commit, String)> {
+struct ParsedCommit {
+    commit: Commit,
+    author: String,
+    committer: String,
+    /// The ref `--source` reached the commit from, such as `refs/heads/main` or `refs/stash`.
+    source_ref: String,
+}
+
+impl ParsedCommit {
+    /// False for stash entries and for commits GitHub made when it merged a pull request.
+    fn is_work(&self) -> bool {
+        self.source_ref != "refs/stash" && !is_stash_subject(&self.commit.subject) && self.committer != GITHUB_COMMITTER
+    }
+}
+
+fn parse_commit(chunk: &str) -> Option<ParsedCommit> {
     let mut lines = chunk.lines();
-    let head: Vec<&str> = lines.next()?.split('\x1f').collect();
-    if head.len() < 5 {
+    let head: Vec<&str> = lines.next()?.splitn(6, '\x1f').collect();
+    if head.len() < 6 {
         return None;
     }
     let (mut files, mut plus, mut minus) = (0, 0, 0);
@@ -103,12 +144,17 @@ fn parse_commit(chunk: &str) -> Option<(Commit, String)> {
         ts: Utc.timestamp_opt(head[1].parse().ok()?, 0).single()?,
         branch: Some(head[3].trim_start_matches("refs/heads/").trim_start_matches("refs/remotes/").to_string())
             .filter(|b| !b.is_empty() && !b.starts_with("refs/")),
-        subject: head[4].to_string(),
+        subject: head[5].to_string(),
         files,
         plus,
         minus,
     };
-    Some((commit, head[2].to_lowercase()))
+    Some(ParsedCommit {
+        commit,
+        author: head[2].to_lowercase(),
+        committer: head[4].to_lowercase(),
+        source_ref: head[3].to_string(),
+    })
 }
 
 fn commit_event(repo: &Path, c: Commit) -> WorkEvent {
@@ -143,6 +189,24 @@ pub fn char_distance(a: &str, b: &str) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    fn chunk(source_ref: &str, committer: &str, subject: &str) -> String {
+        format!("abc123\x1f1760000000\x1fme@x.com\x1f{source_ref}\x1f{committer}\x1f{subject}\n1\t1\tsrc/a.ts\n")
+    }
+
+    #[test]
+    fn github_merges_and_stashes_are_not_work() {
+        let merged = super::parse_commit(&chunk("refs/remotes/origin/HEAD", "noreply@github.com", "fix: a (#310)")).unwrap();
+        assert!(!merged.is_work());
+        let stash = super::parse_commit(&chunk("refs/stash", "me@x.com", "index on main: abc fix")).unwrap();
+        assert!(!stash.is_work());
+        let dropped_stash = super::parse_commit(&chunk("refs/heads/main", "me@x.com", "WIP on main: abc fix")).unwrap();
+        assert!(!dropped_stash.is_work());
+        let local = super::parse_commit(&chunk("refs/heads/feat/x", "me@x.com", "feat: b")).unwrap();
+        assert!(local.is_work());
+        assert_eq!(local.commit.branch.as_deref(), Some("feat/x"));
+        assert_eq!(local.commit.subject, "feat: b");
+    }
+
     #[test]
     fn char_distance_counts_a_typo() {
         assert_eq!(super::char_distance("const ttl = 6O;", "const ttl = 60;"), 1);
