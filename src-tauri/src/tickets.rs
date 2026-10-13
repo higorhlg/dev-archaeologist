@@ -16,15 +16,8 @@ pub struct Ticket {
     pub source: String,
 }
 
-impl Ticket {
-    /// True for a GitHub issue or pull request the app guessed from evidence. A Jira key that
-    /// "Find tickets" finds for the same work replaces it, because time sheets file work under Jira.
-    pub fn yields_to_jira(&self) -> bool {
-        self.source != "you" && is_github_key(&self.key)
-    }
-}
-
 /// `insight-ui#128` names a GitHub issue or pull request; `SHOP-1261` does not.
+/// "Find tickets" offers a Jira key next to a GitHub ticket, because time sheets file work under Jira.
 pub fn is_github_key(key: &str) -> bool {
     key.contains('#')
 }
@@ -200,11 +193,9 @@ mod tests {
     }
 
     #[test]
-    fn only_guessed_github_tickets_yield_to_jira() {
-        let t = |key: &str, source: &str| Ticket { key: key.into(), source: source.into() };
-        assert!(t("orders-api#310", "commit").yields_to_jira());
-        assert!(!t("orders-api#310", "you").yields_to_jira());
-        assert!(!t("SHOP-1261", "branch").yields_to_jira());
+    fn github_keys_have_a_hash() {
+        assert!(is_github_key("orders-api#310"));
+        assert!(!is_github_key("SHOP-1261"));
     }
 
     #[test]

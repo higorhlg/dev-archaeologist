@@ -1,5 +1,7 @@
-//! Jira Cloud REST API v3 with an API token: the account check and a search for the
-//! user's own tickets in a date range. Read only.
+//! Jira Cloud REST API v3 with an API token: the account check, a search for the user's own
+//! tickets in a date range, and a search for tickets that link a GitHub pull request. Read only.
+
+use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use chrono::DateTime;
@@ -14,6 +16,8 @@ const TOKEN: KeychainItem = KeychainItem("jira-api-token");
 pub const TOKEN_PAGE: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
 const MAX_PAGES: usize = 3;
 const PAGE_SIZE: usize = 100;
+/// GitHub tickets looked up per run; each one is a Jira search.
+const MAX_LINK_LOOKUPS: usize = 25;
 
 pub fn has_token() -> bool {
     TOKEN.get().is_some()
@@ -110,6 +114,34 @@ pub fn search(site: &str, email: &str, range: &DayRange) -> Result<Vec<Candidate
     Ok(out)
 }
 
+/// JQL for tickets whose text (summary, description or comments) holds the URL of a GitHub
+/// pull request or issue. `key` is `repo#N`.
+fn link_jql(key: &str) -> Option<String> {
+    let (repo, n) = key.split_once('#')?;
+    if repo.is_empty() || n.is_empty() || !n.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("text ~ \"\\\"{repo}/pull/{n}\\\"\" OR text ~ \"\\\"{repo}/issues/{n}\\\"\" ORDER BY updated DESC"))
+}
+
+/// For each GitHub ticket (`repo#N`), the most recently changed Jira ticket that links it, by
+/// anyone. Teams paste pull request links into Jira comments, so this finds the ticket even when
+/// someone else owns it. Looks up at most `MAX_LINK_LOOKUPS` keys.
+pub fn tickets_linking(site: &str, email: &str, github_keys: &[String], range: &DayRange) -> Result<HashMap<String, Candidate>> {
+    let token = TOKEN.get().ok_or_else(|| anyhow!("Connect Jira in Sources first"))?;
+    let mut out = HashMap::new();
+    for key in github_keys.iter().take(MAX_LINK_LOOKUPS) {
+        let Some(jql) = link_jql(key) else { continue };
+        let body = json!({"jql": jql, "fields": ["summary", "created", "updated"], "maxResults": 1});
+        let page = post(site, email, &token, "/rest/api/3/search/jql", &body)?;
+        let first = page["issues"].as_array().and_then(|a| a.first()).and_then(|i| to_candidate(site, i, range.end_ms()));
+        if let Some(c) = first {
+            out.insert(key.clone(), c);
+        }
+    }
+    Ok(out)
+}
+
 /// A likely Jira site for a work email: `me@acme.com` → `acme.atlassian.net`.
 pub fn guess_site(work_email: &str) -> Option<String> {
     let domain = work_email.rsplit_once('@')?.1;
@@ -124,6 +156,15 @@ mod tests {
 
     fn day(d: &str) -> NaiveDate {
         NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn link_jql_quotes_the_pull_and_issue_urls() {
+        assert_eq!(
+            link_jql("web-frontend#3117").unwrap(),
+            r#"text ~ "\"web-frontend/pull/3117\"" OR text ~ "\"web-frontend/issues/3117\"" ORDER BY updated DESC"#
+        );
+        assert!(link_jql("SHOP-1277").is_none());
     }
 
     #[test]

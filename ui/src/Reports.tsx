@@ -340,7 +340,7 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
 
 /**
  * A ticket "Find tickets" proposed: use it, say no, or type another.
- * Next to a guessed GitHub ticket it is a Jira key that would replace that ticket.
+ * Next to a GitHub ticket it is a Jira key that would replace that ticket.
  */
 function SuggestionChip({ e, run, onOther }: { e: ReportEntry; run: Run; onOther: () => void }) {
   const s = e.suggestion!;

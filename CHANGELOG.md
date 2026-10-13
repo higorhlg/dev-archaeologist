@@ -5,6 +5,16 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.8.2] - 2026-10-13
+
+### Added
+- Find tickets asks Jira which ticket links each GitHub pull request in play (the PR URL in
+  its summary, description or a comment) and suggests that ticket, whoever owns it.
+
+### Changed
+- The Jira suggestion next to a GitHub ticket appears for tickets you set as well as
+  guessed ones. "Use" replaces the GitHub ticket.
+
 ## [0.8.1] - 2026-10-13
 
 ### Changed
