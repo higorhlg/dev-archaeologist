@@ -14,8 +14,9 @@ use crate::trackers::{Epic, TicketInfo};
 const SCHEMA: &str = include_str!("../migrations/0001_init.sql");
 
 /// Columns added to tables that older databases created without them.
-const ADDED_COLUMNS: [(&str, &str, &str); 3] = [
+const ADDED_COLUMNS: [(&str, &str, &str); 4] = [
     ("ticket_suggestions", "via", "TEXT"),
+    ("ticket_suggestions", "auto", "INTEGER NOT NULL DEFAULT 0"),
     ("ticket_info", "epic_key", "TEXT"),
     ("ticket_info", "epic_title", "TEXT"),
 ];
@@ -74,6 +75,9 @@ pub struct StoredSuggestion {
     pub by_ai: bool,
     /// The GitHub ref that led to this Jira ticket. Using the suggestion keeps it as the GitHub ref.
     pub via: Option<String>,
+    /// The evidence leaves no doubt, so reports file the sessions under the ticket until the user
+    /// says "Not this" or sets another.
+    pub auto: bool,
 }
 
 pub fn default_db_path() -> PathBuf {
@@ -127,6 +131,7 @@ impl Store {
         }
         let conn = Connection::open(path).with_context(|| format!("open {}", path.display()))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.busy_timeout(std::time::Duration::from_secs(30))?;
         migrate(&conn)?;
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
@@ -174,15 +179,19 @@ impl Store {
         self.forget_events(crate::adapters::git::SOURCE, &ids)
     }
 
-    /// Inserts events and skips any `(source, source_id)` already stored.
-    /// @returns the number of new rows.
+    /// Inserts events. An event whose `(source, source_id)` is already stored is kept as it is,
+    /// except that it takes the new `meta` when it had none, so a re-scan adds facts a newer
+    /// adapter reads.
+    /// @returns the number of rows added or given meta.
     pub fn insert_events(&self, events: &[WorkEvent]) -> Result<usize> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let mut n = 0;
         {
             let mut stmt = tx.prepare_cached(&format!(
-                "INSERT OR IGNORE INTO work_events ({EVENT_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"
+                "INSERT INTO work_events ({EVENT_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+                 ON CONFLICT (source, source_id) DO UPDATE SET meta = excluded.meta
+                 WHERE work_events.meta IS NULL AND excluded.meta IS NOT NULL"
             ))?;
             for e in events {
                 let meta = if e.meta.is_null() { None } else { Some(e.meta.to_string()) };
@@ -449,9 +458,15 @@ impl Store {
     /// Open suggestions keyed by session id. Dismissed ones are left out.
     pub fn ticket_suggestions(&self) -> Result<std::collections::HashMap<String, StoredSuggestion>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT session_id, ticket, reason, by_ai, via FROM ticket_suggestions WHERE dismissed = 0")?;
+        let mut stmt = conn.prepare("SELECT session_id, ticket, reason, by_ai, via, auto FROM ticket_suggestions WHERE dismissed = 0")?;
         let rows = stmt.query_map([], |r| {
-            let s = StoredSuggestion { ticket: r.get(1)?, reason: r.get(2)?, by_ai: r.get::<_, i64>(3)? == 1, via: r.get(4)? };
+            let s = StoredSuggestion {
+                ticket: r.get(1)?,
+                reason: r.get(2)?,
+                by_ai: r.get::<_, i64>(3)? == 1,
+                via: r.get(4)?,
+                auto: r.get::<_, i64>(5)? == 1,
+            };
             Ok((r.get::<_, String>(0)?, s))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -464,10 +479,10 @@ impl Store {
         let mut n = 0;
         for id in session_ids {
             n += conn.execute(
-                "INSERT INTO ticket_suggestions (session_id, ticket, reason, by_ai, via) VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(session_id) DO UPDATE SET ticket = ?2, reason = ?3, by_ai = ?4, via = ?5, dismissed = 0
+                "INSERT INTO ticket_suggestions (session_id, ticket, reason, by_ai, via, auto) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(session_id) DO UPDATE SET ticket = ?2, reason = ?3, by_ai = ?4, via = ?5, auto = ?6, dismissed = 0
                  WHERE NOT (ticket_suggestions.ticket = ?2 AND ticket_suggestions.dismissed = 1)",
-                params![id, s.ticket, s.reason, s.by_ai as i64, s.via],
+                params![id, s.ticket, s.reason, s.by_ai as i64, s.via, s.auto as i64],
             )?;
         }
         Ok(n)
@@ -582,6 +597,18 @@ impl Store {
         Ok(conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()?)
     }
 
+    /// Sets `key` to `value` unless it already holds it, in one statement, so two processes
+    /// sharing the database never both win.
+    /// @returns true when this call changed the value.
+    pub fn claim_setting(&self, key: &str, value: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "INSERT INTO settings VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value WHERE value <> excluded.value",
+            params![key, value],
+        )?;
+        Ok(n > 0)
+    }
+
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("INSERT OR REPLACE INTO settings VALUES (?1, ?2)", params![key, value])?;
@@ -623,6 +650,14 @@ fn carry_inference(fresh: &Session, inferred: &[Session]) -> Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_setting_is_claimed_once() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.claim_setting("daily_run_day", "2026-10-25").unwrap());
+        assert!(!store.claim_setting("daily_run_day", "2026-10-25").unwrap());
+        assert!(store.claim_setting("daily_run_day", "2026-10-26").unwrap());
+    }
 
     fn sess(id: &str, project: &str, start: i64, end: i64, state: &str, label: &str) -> Session {
         Session {

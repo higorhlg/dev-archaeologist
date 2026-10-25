@@ -19,6 +19,8 @@ pub mod reports;
 pub mod sessions;
 pub mod settings;
 pub mod store;
+pub mod sync;
 pub mod tickets;
 pub mod toggl;
 pub mod trackers;
+pub mod weekly;

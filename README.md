@@ -21,6 +21,9 @@ cd src-tauri && cargo build --bin dev-arch
 ./target/debug/dev-arch backfill 90     # read past logs into the local store
 ./target/debug/dev-arch day 2026-10-06  # print a day's sessions and achievements
 ./target/debug/dev-arch journal 2026-10-06
+./target/debug/dev-arch sync            # catch up, sync tickets, run the daily journal and weekly report
+./target/debug/dev-arch sync-agent install 30   # run `sync` every 30 min while the app is closed
+./target/debug/dev-arch weekly 2026-10-19       # write that week's report to reports/2026-W43.md
 ./target/debug/dev-arch hook            # install the zsh hook file
 cargo test --lib
 ```
@@ -31,4 +34,7 @@ cargo test --lib
 - Agent logs: prompts are clipped to 200 chars and scrubbed; tool output is read only to count tests.
 - Terminal: the hook sends the command name only, never arguments.
 - The journal call sends one digest per day; projects in "never leave this Mac" are left out.
+- Weekly reports: `reports/` next to the database, one Markdown file per ISO week.
+- The sync agent reads the same Keychain items as the app. macOS asks once per new `dev-arch`
+  binary; choose "Always Allow" so unattended runs don't wait on the prompt.
 - API key: macOS Keychain (`dev-archaeologist` / `anthropic-api-key`), or `ANTHROPIC_API_KEY`.

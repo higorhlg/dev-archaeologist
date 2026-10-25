@@ -387,6 +387,16 @@ pub fn tracker_status(p: &Pipeline) -> Result<trackers::TrackerStatus> {
     Ok(trackers::status(&Settings::load(&p.store)?))
 }
 
+/// The outcome of the last automatic ticket sync, if one ran.
+pub fn ticket_sync_status(p: &Pipeline) -> Result<Option<crate::sync::TicketSyncStatus>> {
+    crate::sync::ticket_sync_status(&p.store)
+}
+
+/// Syncs tickets now, without the AI tie-break, whatever the interval says.
+pub fn sync_tickets(p: &Pipeline) -> Result<crate::sync::TicketSyncStatus> {
+    crate::sync::sync_tickets(&p.store)
+}
+
 /// Checks the Jira token, saves it to the Keychain, and stores the site and email.
 pub fn connect_jira(p: &Pipeline, site: &str, email: &str, token: &str) -> Result<trackers::jira::JiraAccount> {
     let site = trackers::jira::normalize_site(site);
@@ -428,7 +438,7 @@ pub fn open_ticket(p: &Pipeline, key: &str) -> Result<()> {
 }
 
 pub fn find_tickets(p: &Pipeline, q: &ReportQuery) -> Result<trackers::find::FindResult> {
-    trackers::find::find_tickets(&p.store, q)
+    trackers::find::find_tickets(&p.store, q, true)
 }
 
 /// Writes approved entries as a Toggl CSV in ~/Downloads and shows the file in Finder.
@@ -441,6 +451,15 @@ pub fn export_toggl_csv(p: &Pipeline, q: &ReportQuery) -> Result<String> {
     std::fs::write(&path, reports::to_csv(&report, &settings.toggl.email))?;
     let _ = std::process::Command::new("open").arg("-R").arg(&path).status();
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// Writes this week's report so far, then shows the weekly reports folder in Finder.
+/// @returns the folder path.
+pub fn open_weekly_reports(p: &Pipeline) -> Result<String> {
+    let monday = crate::weekly::week_start(chrono::Local::now().date_naive());
+    let path = crate::weekly::write_week(p, monday)?;
+    let _ = std::process::Command::new("open").arg("-R").arg(&path).status();
+    Ok(path.parent().unwrap_or(&path).to_string_lossy().into_owned())
 }
 
 /// Saves the token, looks up the account, and stores its email and workspace.

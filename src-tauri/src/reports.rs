@@ -1,7 +1,7 @@
 //! Time reports built from sessions: review, approve, then export to Toggl.
 //! Only sessions the user confirmed count as approved; nothing uncertain is exported.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
@@ -86,7 +86,8 @@ pub struct ReportEntry {
     /// The GitHub issue or pull request. The entry is filed under it only when there is no Jira ticket.
     pub github: Option<Ticket>,
     pub github_info: Option<TicketInfo>,
-    /// A ticket "Find tickets" proposed. Only on entries without a Jira ticket.
+    /// A ticket "Find tickets" proposed. On entries without a Jira ticket, and on entries whose
+    /// Jira ticket is that suggestion applied without a click (source `tracker`).
     pub suggestion: Option<Suggestion>,
     pub session_ids: Vec<String>,
     /// Every session in the entry is confirmed.
@@ -108,6 +109,8 @@ pub struct Suggestion {
     /// Why the ticket fits, such as "same repo, shares invoice, header".
     pub reason: String,
     pub by_ai: bool,
+    /// Applied without a click; the entry's Jira ticket is this one.
+    pub auto: bool,
 }
 
 /// Ticket titles and open suggestions, read once per report.
@@ -121,9 +124,15 @@ impl TicketLookups {
         self.info.get(key).cloned().unwrap_or_else(|| TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: String::new(), epic: None })
     }
 
+    /// The open suggestion for `key` in any of the sessions.
+    fn suggestion_of(&self, session_ids: &[String], key: &str) -> Option<Suggestion> {
+        let s = session_ids.iter().filter_map(|id| self.suggestions.get(id)).find(|s| s.ticket == key)?;
+        Some(Suggestion { info: self.info_for(&s.ticket), reason: s.reason.clone(), by_ai: s.by_ai, auto: s.auto })
+    }
+
     fn suggestion_for(&self, session_ids: &[String]) -> Option<Suggestion> {
         let s = session_ids.iter().find_map(|id| self.suggestions.get(id))?;
-        Some(Suggestion { info: self.info_for(&s.ticket), reason: s.reason.clone(), by_ai: s.by_ai })
+        Some(Suggestion { info: self.info_for(&s.ticket), reason: s.reason.clone(), by_ai: s.by_ai, auto: s.auto })
     }
 }
 
@@ -170,24 +179,32 @@ impl Loaded {
     }
 }
 
-/// The session's Jira ticket and GitHub ref, each from the user's choice when there is one,
-/// else from the evidence. A GitHub key in `ticket_overrides` counts as the GitHub ref.
-fn resolve_tickets(
-    session_id: &str,
-    detected: tickets::Detected,
-    overrides: &std::collections::HashMap<String, String>,
-    github_overrides: &std::collections::HashMap<String, String>,
-) -> (Option<Ticket>, Option<Ticket>) {
+/// What can decide a session's tickets besides its own evidence.
+struct TicketChoices {
+    /// Tickets the user set. A GitHub key here counts as the GitHub ref.
+    overrides: HashMap<String, String>,
+    github_overrides: HashMap<String, String>,
+    /// "Find tickets" suggestions; only the ones marked `auto` apply here.
+    suggestions: HashMap<String, StoredSuggestion>,
+}
+
+/// The session's Jira ticket and GitHub ref. Each comes from the user's choice when there is one,
+/// else from the session's own evidence, else from an `auto` suggestion (source `tracker`), whose
+/// `via` also fills a missing GitHub ref.
+fn resolve_tickets(session_id: &str, detected: tickets::Detected, choices: &TicketChoices) -> (Option<Ticket>, Option<Ticket>) {
     let chosen = |key: &String| (!key.is_empty()).then(|| Ticket { key: key.clone(), source: "you".into() });
-    let ticket_override = overrides.get(session_id);
+    let found = |key: &String| Ticket { key: key.clone(), source: "tracker".into() };
+    let auto = choices.suggestions.get(session_id).filter(|s| s.auto);
+    let ticket_override = choices.overrides.get(session_id);
     let jira = match ticket_override {
         Some(key) if !tickets::is_github_key(key) => chosen(key),
-        _ => detected.jira,
+        Some(_) => detected.jira,
+        None => detected.jira.or_else(|| auto.filter(|s| !tickets::is_github_key(&s.ticket)).map(|s| found(&s.ticket))),
     };
-    let github = match (github_overrides.get(session_id), ticket_override) {
+    let github = match (choices.github_overrides.get(session_id), ticket_override) {
         (Some(key), _) => chosen(key),
         (None, Some(key)) if tickets::is_github_key(key) => chosen(key),
-        _ => detected.github,
+        _ => detected.github.or_else(|| auto.and_then(|s| s.via.as_ref()).map(found)),
     };
     (jira, github)
 }
@@ -201,15 +218,18 @@ fn load(store: &Store, q: &ReportQuery) -> Result<(Vec<Loaded>, BTreeSet<String>
     let (_, to) = day_bounds(parse_day(&q.to)?);
     let history = store.events_between((from - Duration::days(PREFIX_HISTORY_DAYS)).timestamp_millis(), to.timestamp_millis())?;
     let prefixes = tickets::known_prefixes(&history);
-    let overrides = store.ticket_overrides()?;
-    let github_overrides = store.github_ref_overrides()?;
+    let choices = TicketChoices {
+        overrides: store.ticket_overrides()?,
+        github_overrides: store.github_ref_overrides()?,
+        suggestions: store.ticket_suggestions()?,
+    };
     let rules = Settings::load(store)?.contexts;
     let samples = store.project_sample_paths()?;
     let mut out: Vec<(Loaded, Vec<WorkEvent>)> = Vec::new();
     for session in store.sessions_between_days(&q.from, &q.to)? {
         let events = store.events_by_ids(&store.session_event_ids(&session.id)?)?;
         let detected = tickets::detect(&events, session.branch.as_deref(), session.project.as_deref(), &prefixes);
-        let (jira, github) = resolve_tickets(&session.id, detected, &overrides, &github_overrides);
+        let (jira, github) = resolve_tickets(&session.id, detected, &choices);
         let context = rules.resolve(session.project.as_deref().unwrap_or(""), samples.get(session.project.as_deref().unwrap_or("")).map(String::as_str));
         out.push((Loaded { session, jira, github, report_min: 0, gap_min: 0, pending_min: 0, context }, events));
     }
@@ -336,6 +356,7 @@ fn build_entry(key: String, group: Vec<&Loaded>, cx: &EntryContext) -> ReportEnt
         jira_info: jira.as_ref().and_then(|t| lookups.info.get(&t.key).cloned()),
         github_info: github.as_ref().and_then(|t| lookups.info.get(&t.key).cloned()),
         suggestion: match (&jira, &github) {
+            (Some(t), _) if t.source == "tracker" => lookups.suggestion_of(&session_ids, &t.key),
             (Some(_), _) => None,
             (None, None) => lookups.suggestion_for(&session_ids),
             (None, Some(_)) => lookups.suggestion_for(&session_ids).filter(|s| !tickets::is_github_key(&s.info.key)),
@@ -448,4 +469,31 @@ pub fn to_csv(report: &Report, email: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn choices(auto: bool) -> TicketChoices {
+        let s = StoredSuggestion { ticket: "SHOP-7".into(), reason: "links api#3 in Jira".into(), by_ai: false, via: Some("api#3".into()), auto };
+        TicketChoices { overrides: HashMap::new(), github_overrides: HashMap::new(), suggestions: HashMap::from([("s1".to_string(), s)]) }
+    }
+
+    #[test]
+    fn auto_suggestions_fill_missing_tickets() {
+        let (jira, github) = resolve_tickets("s1", tickets::Detected::default(), &choices(true));
+        assert_eq!(jira.map(|t| (t.key, t.source)), Some(("SHOP-7".to_string(), "tracker".to_string())));
+        assert_eq!(github.unwrap().key, "api#3");
+    }
+
+    #[test]
+    fn plain_suggestions_and_choices_win_over_auto() {
+        assert_eq!(resolve_tickets("s1", tickets::Detected::default(), &choices(false)), (None, None));
+        let mut c = choices(true);
+        c.overrides.insert("s1".into(), String::new());
+        assert_eq!(resolve_tickets("s1", tickets::Detected::default(), &c).0, None, "\"no ticket\" stays");
+        let detected = tickets::Detected { jira: Some(Ticket { key: "SHOP-9".into(), source: "branch".into() }), github: None };
+        assert_eq!(resolve_tickets("s1", detected, &choices(true)).0.unwrap().key, "SHOP-9");
+    }
 }

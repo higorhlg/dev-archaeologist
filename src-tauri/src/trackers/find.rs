@@ -1,6 +1,7 @@
 //! "Find tickets": suggests a ticket for each report entry without a Jira ticket. An entry that
 //! has a GitHub issue or pull request gets only a Jira suggestion.
-//! Rules decide clear cases. The AI breaks close calls in one call per run.
+//! Rules decide clear cases. The AI breaks close calls in one call per run. A suggestion the
+//! evidence names outright is applied by reports without a click; the others wait for "Use".
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -17,7 +18,7 @@ use crate::infer::client::{call_structured, StructuredCall};
 use crate::infer::journal::api_key;
 use crate::pipeline::day_bounds;
 use crate::project::find_repo_root;
-use crate::reports::{self, ReportEntry, ReportQuery};
+use crate::reports::{self, Grouping, ReportEntry, ReportQuery};
 use crate::sessions::Session;
 use crate::settings::Settings;
 use crate::store::{Store, StoredSuggestion};
@@ -35,6 +36,8 @@ pub struct FindResult {
     pub suggested: usize,
     /// Suggestions the AI tie-break picked.
     pub by_ai: usize,
+    /// Suggestions the evidence leaves no doubt about, which reports apply without a click.
+    pub applied: usize,
     /// Per tracker: "Jira: 31 tickets".
     pub looked_in: Vec<String>,
     pub errors: Vec<String>,
@@ -43,8 +46,10 @@ pub struct FindResult {
 /// Asks the connected trackers for the user's tickets in the report range, then stores a
 /// suggestion when one fits: any ticket for an entry with neither a Jira ticket nor a GitHub ref,
 /// and only a Jira key for an entry with a GitHub ref. Also refreshes the titles and epics of the
-/// report's Jira tickets. Never sets a ticket itself.
-pub fn find_tickets(store: &Store, q: &ReportQuery) -> Result<FindResult> {
+/// report's Jira tickets. Never pins a ticket: a suggestion marked `auto` files the entry under it
+/// in reports until the user says "Not this" or sets another.
+/// @param use_ai lets close calls go to the AI tie-break; without it they keep the best rule-based guess.
+pub fn find_tickets(store: &Store, q: &ReportQuery, use_ai: bool) -> Result<FindResult> {
     let settings = Settings::load(store)?;
     let report = reports::build(store, q)?;
     let range = DayRange { from: parse_day(&q.from)?, to: parse_day(&q.to)? };
@@ -64,8 +69,13 @@ pub fn find_tickets(store: &Store, q: &ReportQuery) -> Result<FindResult> {
     }
     let linked = jira_tickets_linking(&settings, &open, &candidates, &range, &mut result);
     store.save_ticket_info(&linked.values().map(TicketInfo::from).collect::<Vec<_>>())?;
-    let suggester =
-        Suggester { store, jira_prefixes: prefixes.into_values().flatten().collect(), jira_site: &settings.trackers.jira_site, linked };
+    let suggester = Suggester {
+        store,
+        jira_prefixes: prefixes.into_values().flatten().collect(),
+        jira_site: &settings.trackers.jira_site,
+        linked,
+        refs_shared: q.grouping != Grouping::ProjectDay,
+    };
     let weights = WordWeights::new(&candidates);
     let by_id: HashMap<&str, &ReportEntry> = open.iter().map(|e| (e.key.as_str(), *e)).collect();
     let leads_to_jira: Vec<Candidate> = candidates.iter().filter(|c| suggester.leads_to_jira(c)).cloned().collect();
@@ -74,16 +84,23 @@ pub fn find_tickets(store: &Store, q: &ReportQuery) -> Result<FindResult> {
         let e = by_id[ev.id.as_str()];
         if let Some(n) = suggester.suggest_linked_to_ticket(e)? {
             result.suggested += n;
+            result.applied += if suggester.refs_shared { n } else { 0 };
             continue;
         }
         let has_github = e.github.is_some();
         match judge_jira_first(ev, &leads_to_jira, (!has_github).then_some(&candidates[..]), &weights) {
-            Verdict::Match(s) => result.suggested += suggester.suggest(by_id[ev.id.as_str()], s.candidate, &s.reasons.join(", "), false)?,
+            Verdict::Match(s) => {
+                let how = if s.mentioned { Certainty::Named } else { Certainty::Likely };
+                let (n, auto) = suggester.suggest_auto(e, s.candidate, &s.reasons.join(", "), how)?;
+                result.suggested += n;
+                result.applied += if auto { n } else { 0 };
+            }
             Verdict::Close(list) => close.push((ev, list)),
             Verdict::Nothing => {}
         }
     }
-    break_ties(&suggester, &settings, &by_id, close, &mut result)?;
+    let ai_key = if use_ai { api_key() } else { None };
+    break_ties(&suggester, &settings, ai_key, &by_id, close, &mut result)?;
     Ok(result)
 }
 
@@ -171,6 +188,19 @@ fn jira_tickets_linking(
     }
 }
 
+/// How sure "Find tickets" is of a suggestion.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Certainty {
+    /// The work names the ticket: its exact Jira key, or the entry's own GitHub ref. Applied
+    /// without a click when it leads to a Jira key and the entry is one session.
+    Named,
+    /// The rules found one clear fit by place, time and words.
+    Likely,
+    /// The AI picked it from a close call.
+    AiPick,
+}
+
+
 /// Writes suggestions. A GitHub pick becomes a Jira key when its title names a known one or
 /// a Jira ticket links it, because time sheets file work under the Jira ticket.
 struct Suggester<'a> {
@@ -180,13 +210,24 @@ struct Suggester<'a> {
     jira_site: &'a str,
     /// GitHub key (`repo#N`) → the Jira ticket that links it.
     linked: HashMap<String, Candidate>,
+    /// Every session in an entry has the entry's GitHub ref (grouping by session or ticket), so a
+    /// Jira ticket linking that ref fits each of them.
+    refs_shared: bool,
 }
 
 impl Suggester<'_> {
     /// An entry that already has a GitHub ref gets only a Jira key. A Jira key found through a
     /// GitHub ticket carries that ticket as `via`.
     /// @returns 1 when the entry got the suggestion, 0 when it was dismissed or not a Jira key.
-    fn suggest(&self, e: &ReportEntry, picked: &Candidate, reason: &str, by_ai: bool) -> Result<usize> {
+    fn suggest(&self, e: &ReportEntry, picked: &Candidate, reason: &str, how: Certainty) -> Result<usize> {
+        Ok(self.suggest_auto(e, picked, reason, how)?.0)
+    }
+
+    /// `suggest`, marking the suggestion `auto` when it is `Named`, ends at a Jira key, the entry
+    /// is a single session, and the pick is a Jira ticket or the entry's own GitHub ref. A word
+    /// match or a number in free text never applies on its own.
+    /// @returns the count `suggest` returns and whether the suggestion is `auto`.
+    fn suggest_auto(&self, e: &ReportEntry, picked: &Candidate, reason: &str, how: Certainty) -> Result<(usize, bool)> {
         let via = Some(picked.key.clone());
         let (ticket, reason, via) = match self.jira_key_behind(picked)? {
             Some(key) => (key, format!("named in {}; {reason}", picked.key), via),
@@ -196,19 +237,25 @@ impl Suggester<'_> {
             },
         };
         if e.github.is_some() && tickets::is_github_key(&ticket) {
-            return Ok(0);
+            return Ok((0, false));
         }
-        let s = StoredSuggestion { ticket, reason, by_ai, via };
-        Ok(usize::from(self.store.suggest_ticket(&e.session_ids, &s)? > 0))
+        let own_ref = e.github.as_ref().is_some_and(|g| g.key.eq_ignore_ascii_case(&picked.key));
+        let auto = how == Certainty::Named
+            && !tickets::is_github_key(&ticket)
+            && e.session_ids.len() == 1
+            && (picked.tracker == "jira" || own_ref);
+        let s = StoredSuggestion { ticket, reason, by_ai: how == Certainty::AiPick, via, auto };
+        Ok((usize::from(self.store.suggest_ticket(&e.session_ids, &s)? > 0), auto))
     }
 
-    /// For an entry whose GitHub ref a Jira ticket links, suggests that Jira ticket.
+    /// For an entry whose GitHub ref a Jira ticket links, suggests that Jira ticket and marks it
+    /// for reports to apply without a click when every session in the entry has that ref.
     /// @returns None when there is no such link, else the count `suggest` returns.
     fn suggest_linked_to_ticket(&self, e: &ReportEntry) -> Result<Option<usize>> {
         let Some(github) = &e.github else { return Ok(None) };
-        let Some(jira) = self.linked.get(&github.key) else { return Ok(None) };
+        let Some(jira) = self.linked.get(&github.key).or_else(|| self.linked.get(&github.key.to_lowercase())) else { return Ok(None) };
         let reason = format!("links {} in Jira", github.key);
-        let s = StoredSuggestion { ticket: jira.key.clone(), reason, by_ai: false, via: Some(github.key.clone()) };
+        let s = StoredSuggestion { ticket: jira.key.clone(), reason, by_ai: false, via: Some(github.key.clone()), auto: self.refs_shared };
         Ok(Some(usize::from(self.store.suggest_ticket(&e.session_ids, &s)? > 0)))
     }
 
@@ -258,7 +305,8 @@ fn fetch_candidates(settings: &Settings, range: &DayRange, repos: &[String], res
     found.into_values().collect()
 }
 
-/// Session labels, branch, agent titles, prompts, commit subjects and meeting titles.
+/// Session labels, branch, agent titles, prompts, commit subjects, meeting titles and the
+/// pull requests agent sessions linked.
 fn evidence_text(sessions: &[&Session], events: &[WorkEvent]) -> String {
     let mut parts: Vec<String> = Vec::new();
     for s in sessions {
@@ -270,6 +318,7 @@ fn evidence_text(sessions: &[&Session], events: &[WorkEvent]) -> String {
     parts.extend(of(kind::AI_TITLE));
     parts.extend(of(kind::COMMIT));
     parts.extend(of(kind::MEETING));
+    parts.extend(of(kind::PR_LINK));
     parts.extend(of(kind::PROMPT).take(MAX_PROMPTS).map(|p| clip(&p, 200)));
     let mut seen = BTreeSet::new();
     parts.retain(|p| seen.insert(p.clone()));
@@ -356,10 +405,11 @@ fn tie_input(e: &ReportEntry, ev: &EntryEvidence, list: &[Scored]) -> Value {
 }
 
 /// One AI call decides every close call it may see. Entries from projects that never leave
-/// the Mac, or every entry when there is no API key, keep the best rule-based guess.
+/// the Mac, or every entry when `key` is `None`, keep the best rule-based guess.
 fn break_ties(
     suggester: &Suggester,
     settings: &Settings,
+    key: Option<String>,
     by_id: &HashMap<&str, &ReportEntry>,
     close: Vec<(&EntryEvidence, Vec<Scored>)>,
     result: &mut FindResult,
@@ -367,11 +417,10 @@ fn break_ties(
     if close.is_empty() {
         return Ok(());
     }
-    let key = api_key();
     let may_send = |e: &ReportEntry| key.is_some() && !e.project.as_ref().is_some_and(|p| settings.cloud_opt_out.contains(p));
     let (to_ai, local): (Vec<_>, Vec<_>) = close.into_iter().partition(|(ev, _)| may_send(by_id[ev.id.as_str()]));
     for (ev, list) in &local {
-        result.suggested += suggester.suggest(by_id[ev.id.as_str()], list[0].candidate, &close_reason(list), false)?;
+        result.suggested += suggester.suggest(by_id[ev.id.as_str()], list[0].candidate, &close_reason(list), Certainty::Likely)?;
     }
     if to_ai.is_empty() {
         return Ok(());
@@ -389,13 +438,13 @@ fn break_ties(
             Some(t) if t.is_empty() => {}
             Some(t) => match list.iter().find(|s| &s.candidate.key == t) {
                 Some(pick) => {
-                    let n = suggester.suggest(e, pick.candidate, &ai_reason(pick, list), true)?;
+                    let n = suggester.suggest(e, pick.candidate, &ai_reason(pick, list), Certainty::AiPick)?;
                     result.suggested += n;
                     result.by_ai += n;
                 }
-                None => result.suggested += suggester.suggest(e, list[0].candidate, &close_reason(list), false)?,
+                None => result.suggested += suggester.suggest(e, list[0].candidate, &close_reason(list), Certainty::Likely)?,
             },
-            None => result.suggested += suggester.suggest(e, list[0].candidate, &close_reason(list), false)?,
+            None => result.suggested += suggester.suggest(e, list[0].candidate, &close_reason(list), Certainty::Likely)?,
         }
     }
     Ok(())

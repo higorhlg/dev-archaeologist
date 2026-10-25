@@ -97,8 +97,13 @@ pub fn mentioned_numbers(text: &str) -> BTreeSet<String> {
 fn is_mentioned(c: &Candidate, e: &EntryEvidence, numbers: &BTreeSet<String>) -> bool {
     match (&c.repo, c.key.rsplit_once('#')) {
         (Some(repo), Some((_, n))) => e.repo.as_ref() == Some(repo) && numbers.contains(n),
-        _ => e.text.contains(&c.key),
+        _ => names_key(&e.text, &c.key),
     }
+}
+
+/// True when `text` holds `key` as a whole word: `SHOP-12` is not named by `SHOP-1234`.
+fn names_key(text: &str, key: &str) -> bool {
+    text.split(|ch: char| !(ch.is_alphanumeric() || ch == '-')).any(|w| w == key)
 }
 
 /// How rare each title word is among the candidates. A word in every title counts little.
@@ -207,6 +212,13 @@ pub fn judge<'a>(e: &EntryEvidence, candidates: &'a [Candidate], weights: &WordW
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_is_named_only_as_a_whole_word() {
+        assert!(names_key("fix(SHOP-12): header", "SHOP-12"));
+        assert!(!names_key("see SHOP-1234 and SHOP-120", "SHOP-12"));
+        assert!(!names_key("XSHOP-12", "SHOP-12"));
+    }
 
     const DAY: i64 = 20 * DAY_MS;
 

@@ -1,5 +1,6 @@
 //! Issue trackers the user signs in to, so report entries without a ticket can get one.
-//! Trackers are only asked when the user presses "Find tickets"; nothing is written to them.
+//! Trackers are asked when the user presses "Find tickets" and by the automatic ticket sync
+//! (`crate::sync`); nothing is written to them.
 
 pub mod find;
 pub mod github;
@@ -80,6 +81,8 @@ pub struct TrackerStatus {
     pub github_enabled: bool,
     /// Logins the `gh` CLI is signed in with. Empty when `gh` is missing.
     pub github_accounts: Vec<String>,
+    /// Minutes between automatic ticket syncs; 0 when they are off.
+    pub auto_sync_min: u32,
 }
 
 pub fn status(settings: &Settings) -> TrackerStatus {
@@ -93,5 +96,6 @@ pub fn status(settings: &Settings) -> TrackerStatus {
         jira_email_guess: work_email,
         github_enabled: t.github,
         github_accounts: github::accounts(),
+        auto_sync_min: t.auto_sync_min,
     }
 }

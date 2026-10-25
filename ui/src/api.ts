@@ -110,9 +110,11 @@ export type Settings = {
   contexts: ContextRules;
   calendar_excluded: string[];
   trackers: TrackerSettings;
+  automation: Automation;
 };
 
-export type TrackerSettings = { jira_site: string; jira_email: string; github: boolean };
+export type Automation = { journals: boolean; weekly_report: boolean };
+export type TrackerSettings = { jira_site: string; jira_email: string; github: boolean; auto_sync_min: number };
 export type TrackerStatus = {
   jira_site: string;
   jira_email: string;
@@ -121,12 +123,15 @@ export type TrackerStatus = {
   jira_email_guess: string | null;
   github_enabled: boolean;
   github_accounts: string[];
+  auto_sync_min: number;
 };
+export type TicketSyncStatus = { at_ms: number; from: string; to: string; checked: number; suggested: number; applied: number; errors: string[] };
 export type JiraAccount = { display_name: string; email: string };
-export type FindResult = { checked: number; suggested: number; by_ai: number; looked_in: string[]; errors: string[] };
+export type FindResult = { checked: number; suggested: number; by_ai: number; applied: number; looked_in: string[]; errors: string[] };
 export type Epic = { key: string; title: string };
 export type TicketInfo = { key: string; title: string; url: string; tracker: string; epic: Epic | null };
-export type Suggestion = { info: TicketInfo; reason: string; by_ai: boolean };
+/** `auto`: the evidence names the ticket, so the report already files the entry under it. */
+export type Suggestion = { info: TicketInfo; reason: string; by_ai: boolean; auto: boolean };
 
 export type Status = {
   event_counts: [string, number][];
@@ -248,6 +253,9 @@ export const api = {
   openTicket: (key: string) => invoke<void>("open_ticket", { key }),
   findTickets: (query: ReportQuery) => invoke<FindResult>("find_tickets", { query }),
   dismissSuggestion: (sessionIds: string[]) => invoke<void>("dismiss_suggestion", { sessionIds }),
+  ticketSyncStatus: () => invoke<TicketSyncStatus | null>("ticket_sync_status"),
+  syncTickets: () => invoke<TicketSyncStatus>("sync_tickets"),
+  openWeeklyReports: () => invoke<string>("open_weekly_reports"),
   daysNeedingLabels: (query: ReportQuery) => invoke<string[]>("days_needing_labels", { query }),
 };
 

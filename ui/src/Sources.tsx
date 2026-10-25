@@ -9,6 +9,7 @@ import {
   type Settings,
   type Status,
   type TrackerStatus,
+  type TrackerSettings,
 } from "./api";
 import ScheduleStep from "./ScheduleStep";
 
@@ -45,6 +46,7 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
       cloud_opt_out: lines(optOut),
       model: s.model,
       toggl: s.toggl,
+      automation: s.automation,
     });
     setSaved("Settings saved. Collector changes apply the next time the app opens.");
     onSaved();
@@ -147,6 +149,22 @@ export default function Sources({ status, onSaved }: { status: Status; onSaved: 
             <button disabled={!key.trim()} onClick={saveKey}>Save key</button>
           </span>
         </label>
+        <label className="check-line">
+          <input type="checkbox" checked={s.automation.journals} onChange={(e) => setS({ ...s, automation: { ...s.automation, journals: e.target.checked } })} />
+          Write the journal each morning for finished days of the past week that have none (needs the API key)
+        </label>
+      </section>
+
+      <section>
+        <h2>Weekly report</h2>
+        <label className="check-line">
+          <input type="checkbox" checked={s.automation.weekly_report} onChange={(e) => setS({ ...s, automation: { ...s.automation, weekly_report: e.target.checked } })} />
+          Write last week's work report on Monday, as a Markdown file: time per project and ticket, each day against your hours,
+          the journal, and what still needs a ticket or approval
+        </label>
+        <p className="inline">
+          <button onClick={() => api.openWeeklyReports()}>Open weekly reports</button>
+        </p>
       </section>
 
       <section>
@@ -400,19 +418,44 @@ function TicketSources({ onSaved }: { onSaved: () => void }) {
       setBusy(false);
     }
   };
-  const setGithub = async (github: boolean) => {
+  /** Saves the tracker settings with one field changed; the section is saved whole. */
+  const saveTrackers = async (change: Partial<TrackerSettings>) => {
     if (!status) return;
-    await api.patchSettings({ trackers: { jira_site: status.jira_site, jira_email: status.jira_email, github } });
-    setStatus({ ...status, github_enabled: github });
+    const current: TrackerSettings = {
+      jira_site: status.jira_site,
+      jira_email: status.jira_email,
+      github: status.github_enabled,
+      auto_sync_min: status.auto_sync_min,
+    };
+    const next = { ...current, ...change };
+    await api.patchSettings({ trackers: next });
+    setStatus({ ...status, github_enabled: next.github, auto_sync_min: next.auto_sync_min });
     onSaved();
   };
+  const setGithub = (github: boolean) => saveTrackers({ github });
 
   return (
     <section>
       <h2>Ticket sources</h2>
       <p className="muted">
         Find tickets in Reports asks these for your own tickets in the report range and suggests one for each entry
-        without a ticket. Nothing is written to Jira or GitHub, and no ticket is set until you accept it.
+        without a ticket. A Jira ticket a session names exactly, or one its own pull request leads to, is applied
+        to that session on its own and marked "auto"; "Not this" takes it back. Other suggestions wait for you. Nothing is
+        written to Jira or GitHub.
+      </p>
+      <label className="area">
+        Sync tickets on their own
+        <select value={status?.auto_sync_min ?? 30} disabled={!status} onChange={(e) => saveTrackers({ auto_sync_min: Number(e.target.value) })}>
+          <option value={0}>Never</option>
+          <option value={15}>Every 15 minutes</option>
+          <option value={30}>Every 30 minutes</option>
+          <option value={60}>Every hour</option>
+          <option value={240}>Every 4 hours</option>
+        </select>
+      </label>
+      <p className="muted">
+        Runs at launch and then on this interval while the app is open, over the last two weeks of work, without the AI.
+        To keep syncing while the app is closed, run <code>dev-arch sync-agent install</code> once in a terminal.
       </p>
 
       <h3>Jira {status?.jira_connected && <span className="tag ok">Connected</span>}</h3>

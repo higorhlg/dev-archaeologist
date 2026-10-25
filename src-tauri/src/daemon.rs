@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::thread;
 use std::time::Duration;
 
-use chrono::{Local, Utc};
+use chrono::Utc;
 use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError};
 
 use crate::adapters::git;
@@ -60,36 +60,84 @@ fn write_loop(pipeline: Pipeline, rx: Receiver<WorkEvent>) {
 }
 
 /// Once a minute: reads new agent log lines, new commits and meetings that just ended,
-/// then rebuilds today.
+/// then rebuilds every day since the last poll. The first pass catches up on what happened
+/// while the app was closed. Then syncs tickets when the interval in Sources has passed, and
+/// once a day writes missing journals and last week's report.
 fn poll_loop(pipeline: Pipeline) {
     let mut tail = AgentTail::default();
     loop {
-        let since = Utc::now() - chrono::Duration::days(1);
-        if let Err(err) = poll_once(&pipeline, &mut tail, since) {
+        if let Err(err) = catch_up(&pipeline, &mut tail) {
             eprintln!("dev-arch: poll failed: {err:#}");
+        }
+        if crate::sync::ticket_sync_due(&pipeline.store).unwrap_or(false) {
+            if let Err(err) = crate::sync::sync_tickets(&pipeline.store) {
+                eprintln!("dev-arch: ticket sync failed: {err:#}");
+            }
+        }
+        match crate::sync::run_daily(&pipeline) {
+            Ok(Some(run)) => run.errors.iter().for_each(|e| eprintln!("dev-arch: daily run: {e}")),
+            Ok(None) => {}
+            Err(err) => eprintln!("dev-arch: daily run failed: {err:#}"),
         }
         thread::sleep(POLL_EVERY);
     }
 }
 
-fn poll_once(pipeline: &Pipeline, tail: &mut AgentTail, since: chrono::DateTime<Utc>) -> anyhow::Result<()> {
+/// How far back a catch-up reads at most, and how far back every poll reads at least.
+const MAX_CATCH_UP: chrono::Duration = chrono::Duration::days(90);
+const MIN_LOOK_BACK: chrono::Duration = chrono::Duration::days(1);
+
+/// Bumped when adapters start reading new facts from logs already stored, so the next catch-up
+/// reads the whole history window again and existing events gain them.
+const EVIDENCE_VERSION: i64 = 2;
+
+/// Reads every source since the last successful poll (at least one day back, at most 90),
+/// rebuilds the days in between, and records the poll. Before the user ran the history import
+/// it reads one day only, so onboarding stays the one place that reads the past. Used by the app's poller and by
+/// `dev-arch sync`.
+/// @returns the number of new events.
+pub fn catch_up(pipeline: &Pipeline, tail: &mut AgentTail) -> anyhow::Result<usize> {
+    let now = Utc::now();
+    let store = &pipeline.store;
+    let evidence_current = store.setting("evidence_version")?.and_then(|v| v.parse::<i64>().ok()) >= Some(EVIDENCE_VERSION);
+    let last_poll = store
+        .setting("last_poll_ms")?
+        .and_then(|v| v.parse::<i64>().ok())
+        .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
+        .filter(|_| evidence_current);
+    let oldest = if Settings::load(store)?.backfill_done { now - MAX_CATCH_UP } else { now - MIN_LOOK_BACK };
+    let rebuild_from = last_poll.unwrap_or(oldest).max(oldest);
+    let since = rebuild_from.min(now - MIN_LOOK_BACK);
+    let n = poll_once(pipeline, tail, since)?;
+    pipeline.rebuild_range(rebuild_from, now)?;
+    record_poll(store, now)?;
+    Ok(n)
+}
+
+/// Marks every source as read up to `at` with the current adapters.
+pub fn record_poll(store: &crate::store::Store, at: chrono::DateTime<Utc>) -> anyhow::Result<()> {
+    store.set_setting("last_poll_ms", &at.timestamp_millis().to_string())?;
+    store.set_setting("evidence_version", &EVIDENCE_VERSION.to_string())
+}
+
+/// @returns the number of new events.
+fn poll_once(pipeline: &Pipeline, tail: &mut AgentTail, since: chrono::DateTime<Utc>) -> anyhow::Result<usize> {
     let settings = Settings::load(&pipeline.store)?;
     let mut dirs = BTreeSet::new();
+    let mut n = 0;
     if settings.sources.agents {
         let (cc, cx) = tail.scan(since)?;
         dirs.extend(cc.iter().chain(cx.iter()).filter_map(|e| e.path.clone()));
-        pipeline.ingest(cc)?;
-        pipeline.ingest(cx)?;
+        n += pipeline.ingest(cc)?;
+        n += pipeline.ingest(cx)?;
     }
     if settings.sources.git {
         for repo in repos_to_scan(&settings, &dirs) {
             if let Ok(scan) = git::scan(&repo, since) {
-                pipeline.ingest_git(scan)?;
+                n += pipeline.ingest_git(scan)?;
             }
         }
     }
-    crate::backfill::import_meetings(pipeline, since)?;
-    let today = Local::now().date_naive();
-    pipeline.rebuild_day(today)?;
-    Ok(())
+    n += crate::backfill::import_meetings(pipeline, since)?;
+    Ok(n)
 }

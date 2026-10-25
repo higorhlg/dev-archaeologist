@@ -5,6 +5,40 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.10.0] - 2026-10-25
+
+### Added
+- Tickets from agent sessions. A pull request a Claude Code session opened or pushed to sets
+  the session's GitHub ref, and a Jira ticket an agent moved, edited, commented on or logged
+  work on sets its Jira ticket (a ticket it only opened counts less). Their prefixes count as
+  known Jira prefixes. The next launch reads 90 days of agent logs again to find them.
+- Tickets applied without a click. When a session's work names a Jira key exactly, or its own
+  pull request leads to a Jira ticket (the PR title names the key, or the Jira ticket links
+  the PR), Find tickets applies that Jira ticket to the session and Reports marks it "auto";
+  "Not this" takes it back. Word matches, AI picks and entries of several sessions named by
+  only one of them still wait for "Use".
+- Automatic ticket sync: at launch and every 30 minutes while the app runs (Sources sets the
+  interval or turns it off), session by session over the last two weeks of work, without the
+  AI tie-break. Reports
+  shows when it last ran and reloads when it lands.
+- `dev-arch sync` reads every source since the last poll, syncs tickets when the interval is
+  due (`--tickets` forces it) and runs the daily work, which runs once a day across the app
+  and the agent. `dev-arch sync-agent install [MIN]` installs a LaunchAgent that runs it while the app
+  is closed; `dev-arch sync-agent remove` takes it out.
+- Daily journals: each morning the app writes the AI journal for finished days of the past
+  week that have none, when an API key is saved. A switch in Sources turns it off.
+- Weekly report: on Monday the app writes last week's work report as Markdown next to the
+  database (`reports/2026-W43.md`): time per project and per ticket with titles and epics,
+  each day against the work hours, the journal, and entries that still need a ticket or
+  approval. "Open weekly reports" in Sources writes this week's so far and shows the folder.
+  `dev-arch weekly [DAY]` writes one by hand.
+- The journal digest carries tickets applied without a click.
+- The database waits up to 30 seconds for a lock, so the app and `dev-arch` can write at once.
+
+### Fixed
+- The app reads everything since it last ran instead of the last day only, and rebuilds every
+  day in between, so days with the app closed and work after midnight are no longer lost.
+
 ## [0.9.0] - 2026-10-13
 
 ### Added

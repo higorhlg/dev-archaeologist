@@ -10,6 +10,10 @@
 //!   dev-arch gaps [YYYY-MM-DD]   print the day's gaps inside work hours
 //!   dev-arch fill DAY PROJECT     assign a day's unaccounted blocks to one project
 //!   dev-arch approve-bridges DAY approve a day's bridged gaps
+//!   dev-arch sync [--tickets]    read every source since the last poll, sync tickets when due
+//!                                (or now with --tickets), run the daily automation
+//!   dev-arch weekly [YYYY-MM-DD] write the work report for the week holding the day
+//!   dev-arch sync-agent install [MIN] | remove  run `sync` every MIN minutes while the app is closed
 //!   dev-arch daemon              run the live collectors in the foreground
 //!   dev-arch set-key             read an API key from stdin into the Keychain
 //!   dev-arch hook                install the zsh hook file and print the source line
@@ -148,6 +152,40 @@ fn main() -> Result<()> {
             let s = api::status(&p)?;
             println!("events: {:?}\ndays: {}\napi key: {}", s.event_counts, s.days.len(), if s.has_api_key { "set" } else { "not set" });
         }
+        Some("sync") => {
+            let started = std::time::Instant::now();
+            let n = daemon::catch_up(&p, &mut devarch::backfill::AgentTail::default())?;
+            println!("{} · {n} new events", Local::now().format("%Y-%m-%d %H:%M"));
+            if devarch::sync::ticket_sync_due(&p.store)? || args.get(2).map(String::as_str) == Some("--tickets") {
+                let s = devarch::sync::sync_tickets(&p.store)?;
+                println!(
+                    "tickets {}..{}: checked {} · suggested {} · applied {} · {:.1}s",
+                    s.from, s.to, s.checked, s.suggested, s.applied, started.elapsed().as_secs_f32()
+                );
+                for e in &s.errors {
+                    println!("  error: {e}");
+                }
+            }
+            if let Some(run) = devarch::sync::run_daily(&p)? {
+                println!("daily: journals {:?} · weekly report {}", run.journals, run.weekly_report.as_deref().unwrap_or("-"));
+                for e in &run.errors {
+                    println!("  error: {e}");
+                }
+            }
+        }
+        Some("weekly") => {
+            let day = chrono::NaiveDate::parse_from_str(&arg_day(&args), "%Y-%m-%d")?;
+            println!("{}", devarch::weekly::write_week(&p, devarch::weekly::week_start(day))?.display());
+        }
+        Some("sync-agent") => match args.get(2).map(String::as_str) {
+            Some("remove") => println!("{}", if devarch::sync::remove_launch_agent()? { "sync agent removed" } else { "no sync agent installed" }),
+            Some("install") => {
+                let every = args.get(3).and_then(|m| m.parse::<u32>().ok()).unwrap_or(30).max(devarch::sync::MIN_AGENT_MIN);
+                let path = devarch::sync::install_launch_agent(every)?;
+                println!("sync agent runs `{} sync` every {every} min\n  {}", std::env::current_exe()?.display(), path.display());
+            }
+            _ => bail!("usage: dev-arch sync-agent install [MIN] | remove"),
+        },
         Some("daemon") => {
             daemon::start(p)?;
             println!("dev-arch daemon running; ctrl-c to stop");
@@ -162,7 +200,7 @@ fn main() -> Result<()> {
             println!("API key saved to the Keychain");
         }
         Some("hook") => println!("Add this line to ~/.zshrc:\n  {}", api::install_shell_hook()?),
-        _ => bail!("usage: dev-arch discover|backfill|day|rebuild|journal|status|daemon|set-key|hook"),
+        _ => bail!("usage: dev-arch discover|backfill|day|rebuild|journal|report|find-tickets|sync|sync-agent|weekly|status|daemon|set-key|hook"),
     }
     Ok(())
 }

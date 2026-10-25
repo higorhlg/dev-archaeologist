@@ -22,6 +22,8 @@ import {
   type TogglProject,
   type TogglProjectInfo,
   type TrackerStatus,
+  type TicketSyncStatus,
+  type Suggestion,
 } from "./api";
 
 const RANGES: { id: string; label: string }[] = [
@@ -72,6 +74,7 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
   const [showMapping, setShowMapping] = useState(false);
   const [trackers, setTrackers] = useState<TrackerStatus | null>(null);
   const [finding, setFinding] = useState(false);
+  const [lastSync, setLastSync] = useState<TicketSyncStatus | null>(null);
 
   useEffect(() => {
     api.trackerStatus().then(setTrackers).catch(() => setTrackers(null));
@@ -90,6 +93,7 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
     api.reportDays(query).then(setSchedule);
   }, [query]);
   useEffect(load, [load]);
+  useSyncWatch(setLastSync, load);
 
   /** The last applied options become the saved preference. */
   const applyPrefs = async (next: ReportPrefs) => {
@@ -125,7 +129,7 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
     run(async () => findSummary(await api.findTickets(query))).finally(() => setFinding(false));
   };
 
-  const suggested = (report?.entries ?? []).filter((e) => e.suggestion);
+  const suggested = (report?.entries ?? []).filter((e) => e.suggestion && !e.jira);
   const acceptAll = () =>
     run(async () => {
       for (const e of suggested) await api.setTicket(e.session_ids, e.suggestion!.info.key);
@@ -184,6 +188,7 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
         <span className="spacer" />
         {report && <ExportButtons report={report} query={query} hasToken={status.has_toggl_token} run={run} goToSources={goToSources} />}
       </div>
+      {lastSync && <SyncLine s={lastSync} />}
       {notice && <p className="notice">{notice}</p>}
       {error && <p className="error">{error}</p>}
 
@@ -217,7 +222,39 @@ function findSummary(r: FindResult): string {
   const failed = r.errors.length ? ` ${r.errors.join(" ")}` : "";
   if (r.checked === 0) return "Every entry already has a ticket.";
   const ai = r.by_ai ? `, ${r.by_ai} picked by AI between close matches` : "";
-  return `Suggested tickets for ${r.suggested} of ${r.checked} entries without one${ai}.${where}${failed}`;
+  const applied = r.applied ? ` ${r.applied} named outright were applied; "Not this" undoes one.` : "";
+  return `Suggested tickets for ${r.suggested} of ${r.checked} entries without one${ai}.${applied}${where}${failed}`;
+}
+
+/**
+ * Reads the last automatic ticket sync every minute and reloads the report when a new one lands.
+ * @param onStatus receives each status read.
+ * @param reload runs after a sync newer than the last one seen.
+ */
+function useSyncWatch(onStatus: (s: TicketSyncStatus | null) => void, reload: () => void) {
+  useEffect(() => {
+    let seen: number | null = null;
+    const check = () =>
+      api.ticketSyncStatus().then((s) => {
+        onStatus(s);
+        if (s && seen !== null && s.at_ms !== seen) reload();
+        seen = s?.at_ms ?? 0;
+      }).catch(() => onStatus(null));
+    check();
+    const timer = setInterval(check, 60_000);
+    return () => clearInterval(timer);
+  }, [onStatus, reload]);
+}
+
+/** When tickets last synced on their own, what changed, and what failed. */
+function SyncLine({ s }: { s: TicketSyncStatus }) {
+  const what = s.checked === 0 ? "every entry had a ticket" : `${s.applied} applied, ${s.suggested - s.applied} suggested of ${s.checked} without one`;
+  return (
+    <p className="muted sync-line">
+      Tickets synced on their own at {hhmm(s.at_ms)} for {longDay(s.from)} to {longDay(s.to)}: {what}.
+      {s.errors.length > 0 && <span className="error"> {s.errors.join(" ")}</span>}
+    </p>
+  );
 }
 
 function Seg<T extends string>({ label, options, value, onChange }: { label: string; options: { id: T; label: string }[]; value: T; onChange: (v: T) => void }) {
@@ -296,7 +333,8 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
           {editing === "jira" ? (
             <TicketEditor initial={e.jira?.key ?? ""} placeholder="SHOP-1261 or repo#12" onSave={saveTicket} onCancel={() => setEditing(null)} />
           ) : e.jira ? (
-            <TicketChip ticket={e.jira} info={e.jira_info} run={run} onEdit={() => setEditing("jira")} />
+            <TicketChip ticket={e.jira} info={e.jira_info} run={run} onEdit={() => setEditing("jira")}
+              auto={e.jira.source === "tracker" ? e.suggestion : null} onReject={() => run(() => api.dismissSuggestion(e.session_ids))} />
           ) : e.suggestion ? (
             <SuggestionChip e={e} run={run} onOther={() => setEditing("jira")} />
           ) : (
@@ -337,14 +375,25 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
  * A ticket chip: the key, with the title and epic on hover. Click to change it; "Open" opens it.
  * @param ticket the Jira ticket or the GitHub ref of an entry.
  * @param info the stored title, link and epic, when a tracker returned them.
+ * @param auto the suggestion the report applied without a click, which "Not this" takes back.
  */
-function TicketChip({ ticket, info, run, onEdit }: { ticket: Ticket; info: TicketInfo | null; run: Run; onEdit: () => void }) {
+function TicketChip({ ticket, info, run, onEdit, auto, onReject }: {
+  ticket: Ticket;
+  info: TicketInfo | null;
+  run: Run;
+  onEdit: () => void;
+  auto?: Suggestion | null;
+  onReject?: () => void;
+}) {
   const github = ticket.key.includes("#");
   const epic = info?.epic;
-  const title = [info?.title, epic && `Epic ${epic.key}: ${epic.title}`, `Found in ${ticket.source}. Click to change.`].filter(Boolean).join("\n");
+  const found = auto ? `Linked on its own: ${auto.reason}.` : `Found in ${ticket.source}.`;
+  const title = [info?.title, epic && `Epic ${epic.key}: ${epic.title}`, `${found} Click to change.`].filter(Boolean).join("\n");
   return (
     <>
       <button className={`ticket ${github ? "github" : ""}`} title={title} onClick={onEdit}>{ticket.key}</button>
+      {auto && <span className="tag" title={auto.reason}>auto</span>}
+      {auto && onReject && <button className="small" onClick={onReject}>Not this</button>}
       {epic && <span className="tag epic" title={`Epic ${epic.key}`}>{epic.title || epic.key}</span>}
       {info?.url && <button className="link small" onClick={() => run(() => api.openTicket(ticket.key))}>Open</button>}
     </>

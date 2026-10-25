@@ -50,9 +50,11 @@ struct PendingTest {
     ts: DateTime<Utc>,
 }
 
-/// Parses one Claude Code session file. Field names match the logs on 2026-10-09:
-/// `type`, `timestamp`, `uuid`, `cwd`, `gitBranch`, `message`, `isMeta`, `isSidechain`, `aiTitle`.
-/// Reads prompts (clipped), tool names, file paths and test counts. Never tool output text.
+/// Parses one Claude Code session file. Field names match the logs on 2026-10-25:
+/// `type`, `timestamp`, `uuid`, `cwd`, `gitBranch`, `message`, `isMeta`, `isSidechain`, `aiTitle`,
+/// and `prNumber`, `prRepository` on `pr-link` records.
+/// Reads prompts (clipped), tool names, file paths, the Jira key a tool acted on, pull requests
+/// the session linked, and test counts. Never tool output text.
 pub fn parse_file(path: &Path, since: DateTime<Utc>) -> Result<Vec<WorkEvent>> {
     let session_id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let reader = BufReader::new(std::fs::File::open(path)?);
@@ -75,6 +77,12 @@ pub fn parse_file(path: &Path, since: DateTime<Utc>) -> Result<Vec<WorkEvent>> {
             continue;
         }
         let Some(ts) = ts else { continue };
+        if rec.get("type").and_then(Value::as_str) == Some("pr-link") {
+            if ts >= since {
+                out.extend(pr_link_event(&rec, &session_id, last_ts.unwrap_or(ts), &last_cwd));
+            }
+            continue;
+        }
         last_ts = Some(ts);
         let cwd = rec.get("cwd").and_then(Value::as_str).map(String::from);
         if cwd.is_some() {
@@ -155,6 +163,9 @@ fn tool_event(
     }
     let mut e = WorkEvent::new(SOURCE, id, ts, kind::TOOL_USE);
     e.detail = Some(name.to_string());
+    if let Some((key, action)) = jira_tool_target(name, &input) {
+        e.meta = json!({ "ticket": key, "ticket_action": action });
+    }
     e.path = input
         .get("file_path")
         .or_else(|| input.get("notebook_path"))
@@ -163,6 +174,37 @@ fn tool_event(
         .or_else(|| cwd.clone());
     e.branch = branch.clone();
     e
+}
+
+/// A pull request the session opened or pushed to, recorded by Claude Code as a `pr-link`.
+/// `detail` is `repo#N` in lowercase, the form tracker keys take. `ts` is the session's last
+/// activity before the record, so a link written when a session resumes adds no time of its own.
+fn pr_link_event(rec: &Value, session_id: &str, ts: DateTime<Utc>, cwd: &Option<String>) -> Option<WorkEvent> {
+    let number = rec.get("prNumber").and_then(Value::as_i64)?;
+    let repo = rec.get("prRepository").and_then(Value::as_str)?;
+    let name = repo.rsplit('/').next().filter(|n| !n.is_empty())?;
+    let mut e = WorkEvent::new(SOURCE, format!("{session_id}:pr:{repo}#{number}"), ts, kind::PR_LINK);
+    e.detail = Some(format!("{}#{number}", name.to_lowercase()));
+    e.path = cwd.clone();
+    e.meta = json!({ "repo": repo.to_lowercase(), "number": number });
+    Some(e)
+}
+
+/// The Jira key a Jira tool call acted on, and whether it changed the ticket (`write`:
+/// transition, edit, comment, worklog) or only read it (`read`). Tools that touch several
+/// tickets at once, such as a search or a link between two, name no single ticket.
+fn jira_tool_target(name: &str, input: &Value) -> Option<(String, &'static str)> {
+    let action = name.rsplit("__").next().unwrap_or(name);
+    if !action.to_lowercase().contains("jira") {
+        return None;
+    }
+    let key = input.get("issueIdOrKey").or_else(|| input.get("issueKey")).and_then(Value::as_str)?.trim().to_uppercase();
+    if !crate::tickets::is_jira_key(&key) {
+        return None;
+    }
+    let writes = ["transition", "edit", "update", "addcomment", "addworklog"];
+    let lower = action.to_lowercase();
+    Some((key, if writes.iter().any(|w| lower.starts_with(w)) { "write" } else { "read" }))
 }
 
 fn test_event(
@@ -197,4 +239,44 @@ fn close_turn(turn: &mut Turn, out: &mut Vec<WorkEvent>) {
         out.push(e);
     }
     *turn = Turn::default();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_lines(name: &str, lines: &[Value]) -> Vec<WorkEvent> {
+        let path = std::env::temp_dir().join(format!("devarch-cc-{name}-{}.jsonl", std::process::id()));
+        std::fs::write(&path, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n")).unwrap();
+        let out = parse_file(&path, DateTime::<Utc>::MIN_UTC).unwrap();
+        std::fs::remove_file(&path).ok();
+        out
+    }
+
+    #[test]
+    fn reads_pr_links_once_per_pull_request() {
+        let link = |ts: &str| json!({"type": "pr-link", "prNumber": 210, "prRepository": "acme/Shop-Admin", "timestamp": ts});
+        let events = parse_lines("pr", &[
+            json!({"type": "user", "timestamp": "2026-10-21T13:00:00Z", "uuid": "u1", "cwd": "/r/shop-admin", "message": {"content": "open the PR"}}),
+            link("2026-10-21T13:59:21Z"),
+            link("2026-10-21T13:59:32Z"),
+        ]);
+        let prs: Vec<&WorkEvent> = events.iter().filter(|e| e.kind == kind::PR_LINK).collect();
+        assert_eq!(prs.len(), 2, "the store keeps one: both share a source id");
+        assert_eq!(prs[0].source_id, prs[1].source_id);
+        assert_eq!(prs[0].detail.as_deref(), Some("shop-admin#210"));
+        assert_eq!(prs[0].ts, "2026-10-21T13:00:00Z".parse::<DateTime<Utc>>().unwrap(), "placed at the last activity");
+        assert_eq!(prs[0].path.as_deref(), Some("/r/shop-admin"));
+    }
+
+    #[test]
+    fn tags_jira_tool_calls_with_their_ticket() {
+        let target = |name: &str, input: Value| jira_tool_target(name, &input);
+        assert_eq!(target("mcp__claude_ai_Atlassian__transitionJiraIssue", json!({"issueIdOrKey": "SHOP-12"})), Some(("SHOP-12".into(), "write")));
+        assert_eq!(target("mcp__claude_ai_Atlassian__addCommentToJiraIssue", json!({"issueIdOrKey": "shop-12"})), Some(("SHOP-12".into(), "write")));
+        assert_eq!(target("mcp__claude_ai_Atlassian__getJiraIssue", json!({"issueIdOrKey": "SHOP-12"})), Some(("SHOP-12".into(), "read")));
+        assert_eq!(target("mcp__claude_ai_Atlassian__getJiraIssue", json!({"issueIdOrKey": "10042"})), None);
+        assert_eq!(target("mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql", json!({"jql": "key = SHOP-12"})), None);
+        assert_eq!(target("Read", json!({"issueIdOrKey": "SHOP-12"})), None);
+    }
 }

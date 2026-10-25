@@ -34,7 +34,8 @@ pub struct DigestSession {
     pub commits: Vec<DigestCommit>,
     pub tests: DigestTests,
     pub apps: Vec<String>,
-    /// The ticket the user set or accepted for this session. Absent otherwise.
+    /// The ticket the user set or accepted for this session, or the one "Find tickets" applied
+    /// because the evidence names it. Absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ticket: Option<DigestTicket>,
 }
@@ -81,9 +82,11 @@ fn hhmm(ms: i64) -> String {
 }
 
 /// Builds the digest for a day. Excluded sessions and opted-out projects are left out.
-/// A session carries a ticket only when the user set or accepted one.
+/// A session carries a ticket only when the user set or accepted one, or "Find tickets" applied
+/// one on its own (`auto`), which the user can still take back.
 pub fn build(store: &Store, day: &str, opt_out: &[String]) -> anyhow::Result<SessionDigest> {
     let confirmed = store.ticket_overrides()?;
+    let auto = store.ticket_suggestions()?;
     let info = store.ticket_info()?;
     let mut sessions = Vec::new();
     for s in store.sessions_for_day(day)? {
@@ -92,7 +95,11 @@ pub fn build(store: &Store, day: &str, opt_out: &[String]) -> anyhow::Result<Ses
         }
         let events = store.events_by_ids(&store.session_event_ids(&s.id)?)?;
         let mut d = digest_session(&s, &events);
-        d.ticket = confirmed.get(&s.id).filter(|k| !k.is_empty()).map(|k| DigestTicket {
+        let chosen = match confirmed.get(&s.id) {
+            Some(k) => Some(k).filter(|k| !k.is_empty()),
+            None => auto.get(&s.id).filter(|a| a.auto).map(|a| &a.ticket),
+        };
+        d.ticket = chosen.map(|k| DigestTicket {
             key: k.clone(),
             title: info.get(k).map(|i| i.title.clone()).unwrap_or_default(),
         });

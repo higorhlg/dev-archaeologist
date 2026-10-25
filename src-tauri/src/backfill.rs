@@ -60,6 +60,7 @@ pub struct BackfillReport {
 
 /// Reads past agent sessions and the commits of every repo they or the roots point at.
 pub fn backfill(pipeline: &Pipeline, since: DateTime<Utc>) -> Result<BackfillReport> {
+    let started = Utc::now();
     let settings = Settings::load(&pipeline.store)?;
     let mut report = BackfillReport::default();
     let mut agent_dirs = BTreeSet::new();
@@ -80,6 +81,7 @@ pub fn backfill(pipeline: &Pipeline, since: DateTime<Utc>) -> Result<BackfillRep
     pipeline.forget_stash_commits()?;
     report.meetings = import_meetings(pipeline, since)?;
     report.sessions = pipeline.rebuild_range(since, Utc::now())?;
+    crate::daemon::record_poll(&pipeline.store, started)?;
     let mut s = Settings::load(&pipeline.store)?;
     s.backfill_done = true;
     s.save(&pipeline.store)?;

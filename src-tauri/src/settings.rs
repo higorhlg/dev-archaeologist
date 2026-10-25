@@ -35,6 +35,25 @@ pub struct Settings {
     pub calendar_excluded: Vec<String>,
     /// Where "Find tickets" looks for the user's tickets.
     pub trackers: TrackerSettings,
+    /// Reports the app writes on its own.
+    pub automation: Automation,
+}
+
+/// Work the app does once a day without a click.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Automation {
+    /// Write the AI journal for finished days of the past week that have none. Needs an API key;
+    /// projects that never leave the Mac stay out of the digest as always.
+    pub journals: bool,
+    /// Write last week's work report as Markdown once the week is over.
+    pub weekly_report: bool,
+}
+
+impl Default for Automation {
+    fn default() -> Self {
+        Self { journals: true, weekly_report: true }
+    }
 }
 
 /// Issue trackers that "Find tickets" asks. Secrets stay in the Keychain, not here.
@@ -47,11 +66,13 @@ pub struct TrackerSettings {
     pub jira_email: String,
     /// Ask GitHub through the accounts the `gh` CLI is signed in with.
     pub github: bool,
+    /// Minutes between automatic ticket syncs while the app runs, and at launch. 0 turns them off.
+    pub auto_sync_min: u32,
 }
 
 impl Default for TrackerSettings {
     fn default() -> Self {
-        Self { jira_site: String::new(), jira_email: String::new(), github: true }
+        Self { jira_site: String::new(), jira_email: String::new(), github: true, auto_sync_min: 30 }
     }
 }
 
@@ -158,6 +179,7 @@ impl Default for Settings {
             contexts: ContextRules::default(),
             calendar_excluded: Vec::new(),
             trackers: TrackerSettings::default(),
+            automation: Automation::default(),
         }
     }
 }

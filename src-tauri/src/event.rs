@@ -59,6 +59,8 @@ pub mod kind {
     pub const IDLE_START: &str = "idle_start";
     pub const IDLE_END: &str = "idle_end";
     pub const MEETING: &str = "meeting";
+    /// An agent session opened or pushed a pull request. `detail` is `repo#N`.
+    pub const PR_LINK: &str = "pr_link";
 }
 
 /// Cuts a string to at most `max` chars on a char boundary.

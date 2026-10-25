@@ -12,7 +12,8 @@ use crate::event::{kind, WorkEvent};
 pub struct Ticket {
     /// `SHOP-1261` or `insight-ui#128`.
     pub key: String,
-    /// Where the strongest match came from: `branch`, `commit`, `link`, `prompt`, or `you`.
+    /// Where the strongest match came from: `branch`, `commit`, `agent`, `link`, `prompt`,
+    /// `meeting`, or `you`.
     pub source: String,
 }
 
@@ -30,6 +31,12 @@ const PR_LINK: u32 = 2;
 const COMMIT_REF: u32 = 3;
 const PROMPT: u32 = 1;
 const MEETING_TITLE: u32 = 2;
+/// An agent changed the Jira ticket: moved it, edited it, commented or logged work on it.
+const AGENT_JIRA_WRITE: u32 = 4;
+/// An agent opened the Jira ticket to read it.
+const AGENT_JIRA_READ: u32 = 2;
+/// The agent session opened or pushed to this pull request.
+const AGENT_PR: u32 = 4;
 
 fn jira_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -59,11 +66,29 @@ fn branch_issue_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"(?i)\b(?:issue|issues|gh)[-/_](\d+)\b").unwrap())
 }
 
-/// Jira prefixes seen where only real tickets appear: branch names and commit scopes.
-/// A key such as `SKU-20052` in free text is ignored unless `SKU` is in this set.
+/// True when `key` is shaped like a Jira key, such as `SHOP-1261`.
+pub fn is_jira_key(key: &str) -> bool {
+    jira_re().find(key).is_some_and(|m| m.start() == 0 && m.end() == key.len())
+}
+
+/// The Jira key an agent tool call acted on, with `write` or `read`.
+fn agent_jira_target(e: &WorkEvent) -> Option<(&str, &str)> {
+    if e.kind != kind::TOOL_USE {
+        return None;
+    }
+    let key = e.meta.get("ticket")?.as_str()?;
+    Some((key, e.meta.get("ticket_action").and_then(|a| a.as_str()).unwrap_or("read")))
+}
+
+/// Jira prefixes seen where only real tickets appear: branch names, commit scopes, and tickets
+/// an agent opened in Jira. A key such as `SKU-20052` in free text is ignored unless `SKU` is in
+/// this set.
 pub fn known_prefixes(events: &[WorkEvent]) -> BTreeSet<String> {
     let mut set = BTreeSet::new();
     for e in events {
+        if let Some((key, _)) = agent_jira_target(e) {
+            set.extend(key.split('-').next().map(String::from));
+        }
         if let Some(b) = &e.branch {
             set.extend(jira_re().captures_iter(b).map(|c| c[1].to_string()));
         }
@@ -131,8 +156,13 @@ pub fn detect(events: &[WorkEvent], branch: Option<&str>, project: Option<&str>,
         }
     }
     for e in events {
+        if let Some((key, action)) = agent_jira_target(e) {
+            t.add(key.to_string(), if action == "write" { AGENT_JIRA_WRITE } else { AGENT_JIRA_READ }, "agent");
+            continue;
+        }
         let Some(text) = e.detail.as_deref() else { continue };
         match e.kind.as_str() {
+            kind::PR_LINK => t.add(text.to_string(), AGENT_PR, "agent"),
             kind::COMMIT => {
                 if let Some(c) = scope_re().captures(text) {
                     if let Some(m) = c.get(1).or_else(|| c.get(2)) {
@@ -210,6 +240,29 @@ mod tests {
         let found = detect(&events, None, Some("web-frontend"), &prefixes);
         assert_eq!(found.jira.unwrap().key, "SHOP-1277");
         assert_eq!(found.github.unwrap().key, "web-frontend#3117");
+    }
+
+    #[test]
+    fn agent_jira_actions_and_pr_links_count() {
+        let mut moved = ev(kind::TOOL_USE, "mcp__claude_ai_Atlassian__transitionJiraIssue", None);
+        moved.meta = serde_json::json!({ "ticket": "SHOP-1300", "ticket_action": "write" });
+        let mut read = ev(kind::TOOL_USE, "mcp__claude_ai_Atlassian__getJiraIssue", None);
+        read.meta = serde_json::json!({ "ticket": "SHOP-1299", "ticket_action": "read" });
+        let pr = ev(kind::PR_LINK, "subscription-api#330", None);
+        let events = vec![read, moved, pr, ev(kind::PROMPT, "look at SHOP-1299 first", None)];
+        let prefixes = known_prefixes(&events);
+        assert!(prefixes.contains("SHOP"));
+        let found = detect(&events, Some("main"), Some("subscription-api"), &prefixes);
+        let jira = found.jira.unwrap();
+        assert_eq!((jira.key.as_str(), jira.source.as_str()), ("SHOP-1300", "agent"));
+        assert_eq!(found.github.unwrap().key, "subscription-api#330");
+    }
+
+    #[test]
+    fn jira_key_shape() {
+        assert!(is_jira_key("SHOP-1261"));
+        assert!(!is_jira_key("10042"));
+        assert!(!is_jira_key("SHOP-1261 extra"));
     }
 
     #[test]

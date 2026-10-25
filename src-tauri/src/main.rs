@@ -255,6 +255,23 @@ async fn find_tickets(p: State<'_, Pipeline>, query: ReportQuery) -> CmdResult<d
     tauri::async_runtime::spawn_blocking(move || api::find_tickets(&p, &query)).await.map_err(|e| e.to_string())?.map_err(err)
 }
 
+#[tauri::command]
+fn ticket_sync_status(p: State<Pipeline>) -> CmdResult<Option<devarch::sync::TicketSyncStatus>> {
+    api::ticket_sync_status(&p).map_err(err)
+}
+
+#[tauri::command]
+async fn sync_tickets(p: State<'_, Pipeline>) -> CmdResult<devarch::sync::TicketSyncStatus> {
+    let p = p.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || api::sync_tickets(&p)).await.map_err(|e| e.to_string())?.map_err(err)
+}
+
+#[tauri::command]
+async fn open_weekly_reports(p: State<'_, Pipeline>) -> CmdResult<String> {
+    let p = p.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || api::open_weekly_reports(&p)).await.map_err(|e| e.to_string())?.map_err(err)
+}
+
 fn main() {
     let store = Store::open(&default_db_path()).expect("open the local database");
     let pipeline = Pipeline::new(store);
@@ -271,7 +288,8 @@ fn main() {
             export_toggl_csv, connect_toggl, toggl_projects, send_to_toggl, days_needing_labels, ai_models, report_days, resolve_gap,
             approve_bridges, fill_to_schedule, save_schedule, project_contexts, set_project_context, patch_settings, detect_contexts,
             calendar_status, connect_calendar, reimport_meetings, dismiss_suggestion, tracker_status, connect_jira,
-            open_jira_token_page, open_ticket, find_tickets
+            open_jira_token_page, open_ticket, find_tickets, ticket_sync_status, sync_tickets,
+            open_weekly_reports
         ])
         .run(tauri::generate_context!())
         .expect("run the Dev Archaeologist window");
