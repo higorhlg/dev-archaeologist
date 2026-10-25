@@ -64,7 +64,7 @@ fn print_day(p: &Pipeline, day: &str) -> Result<()> {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let db = std::env::var("DEV_ARCH_DB").map(Into::into).unwrap_or_else(|_| default_db_path());
+    let db = default_db_path();
     let p = Pipeline::new(Store::open(&db)?);
     match args.get(1).map(String::as_str) {
         Some("discover") => println!("{}", serde_json::to_string_pretty(&api::discover(&p, arg_days(&args))?)?),
@@ -88,6 +88,7 @@ fn main() -> Result<()> {
                 grouping: serde_json::from_value(serde_json::json!(args.get(4).map(String::as_str).unwrap_or("ticket_day")))?,
                 tickets: devarch::reports::TicketMode::Prefix,
                 context: serde_json::from_value(serde_json::json!(args.get(5).map(String::as_str).unwrap_or("work")))?,
+                fit_day_min: None,
             };
             let r = api::report(&p, &q)?;
             println!("{} min total · {} approved · {} to review · prefixes {:?}", r.total_min, r.approved_min, r.review_count, r.known_prefixes);
@@ -105,6 +106,7 @@ fn main() -> Result<()> {
                 grouping: devarch::reports::Grouping::TicketDay,
                 tickets: devarch::reports::TicketMode::Prefix,
                 context: serde_json::from_value(serde_json::json!(args.get(4).map(String::as_str).unwrap_or("work")))?,
+                fit_day_min: None,
             };
             let r = api::find_tickets(&p, &q)?;
             println!("checked {} · suggested {} ({} by AI) · {:?}", r.checked, r.suggested, r.by_ai, r.looked_in);

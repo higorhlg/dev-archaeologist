@@ -5,6 +5,36 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [0.11.0] - 2026-10-25
+
+### Added
+- Pull requests from agent shell commands. A `gh pr` command a Claude Code or Codex session
+  ran sets the session's GitHub ref when it names the repo and number: one the session opened
+  counts most, then one it edited, commented on, reviewed, merged or checked out, then one it
+  only viewed (less again for a repo other than the session's project). Each pull request
+  counts once per session, so repeated status checks do not outweigh the PR the session
+  opened. Pull requests a session only viewed stay out of the text Find tickets matches.
+- Codex sessions read the pull request `gh pr create` opened from its output, and the branch
+  a `git switch -c`, `git checkout -b`, `git worktree add -b` or `gh pr create --head` created.
+- The next launch reads 90 days of agent logs again to find them.
+- "Fit days to N h" in Reports (8 by default) scales each work day's entries in proportion so
+  the day adds up to N hours, in 5-minute steps, laid back to back so none overlap. The CSV
+  and Toggl export use the fitted time. Weekends and days off the schedule keep their
+  measured time, entries already sent to Toggl keep theirs, and each entry and day shows the
+  measured time beside the fitted one.
+- The app opens the database `DEV_ARCH_DB` names, like `dev-arch`.
+
+### Changed
+- The weekly report reads more easily: durations such as `35m`, each project's share, an epic
+  column only when a ticket has an epic, a Days table even without a work schedule, and
+  "Needs attention" listing only the entries without a ticket, longest first, plus one line
+  on how much is still unapproved.
+- The automatic sync line in Reports says "nothing new" instead of "0 applied, 0 suggested".
+
+### Fixed
+- A lowercase Jira key in a branch name, such as `feat/shop-1068-pricing`, names the ticket
+  when its prefix is a known Jira prefix.
+
 ## [0.10.0] - 2026-10-25
 
 ### Added

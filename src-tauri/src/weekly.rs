@@ -14,7 +14,7 @@ use crate::reports::{self, ContextFilter, Grouping, Report, ReportEntry, ReportQ
 
 /// The folder next to the database where weekly reports go.
 pub fn reports_dir() -> PathBuf {
-    let db = std::env::var("DEV_ARCH_DB").map(PathBuf::from).unwrap_or_else(|_| crate::store::default_db_path());
+    let db = crate::store::default_db_path();
     db.parent().map(PathBuf::from).unwrap_or_default().join("reports")
 }
 
@@ -44,6 +44,7 @@ pub fn write_week(p: &Pipeline, monday: NaiveDate) -> Result<PathBuf> {
         grouping: Grouping::TicketDay,
         tickets: TicketMode::Prefix,
         context: ContextFilter::Work,
+        fit_day_min: None,
     };
     let report = reports::build(&p.store, &q)?;
     let days = api::report_days(p, &q)?;
@@ -62,8 +63,18 @@ pub fn write_week(p: &Pipeline, monday: NaiveDate) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// `35m` under an hour, `9h05` from an hour up.
 fn hours(min: i64) -> String {
-    format!("{}h{:02}", min / 60, min % 60)
+    if min < 60 {
+        format!("{min}m")
+    } else {
+        format!("{}h{:02}", min / 60, min % 60)
+    }
+}
+
+/// `Mon 12 Oct` for `2026-10-12`; the text itself when it is not a date.
+fn day_name(day: &str) -> String {
+    NaiveDate::parse_from_str(day, "%Y-%m-%d").map(|d| d.format("%a %-d %b").to_string()).unwrap_or_else(|_| day.to_string())
 }
 
 /// Markdown table cells hold no pipes or new lines.
@@ -83,83 +94,148 @@ fn ticket_of(e: &ReportEntry) -> Option<(String, String, String)> {
     Some((t.key.clone(), title, epic))
 }
 
-/// The report as Markdown: totals, projects, tickets, days against the schedule, journal lines,
-/// and what still needs attention.
+/// The report as Markdown: totals, projects, tickets, days (against the schedule when one is
+/// set), journal lines, the entries without a ticket, and how much is still unapproved.
 pub fn render(monday: NaiveDate, report: &Report, days: &[DaySchedule], journals: &[(String, Vec<String>)]) -> String {
     let sunday = monday + Duration::days(6);
     let counted: Vec<&ReportEntry> = report.entries.iter().filter(|e| !e.skip).collect();
     let mut out = String::new();
     let _ = writeln!(out, "# {} · {} to {}\n", week_name(monday), monday.format("%a %-d %b"), sunday.format("%a %-d %b %Y"));
-    let _ = writeln!(
-        out,
-        "**{}** of work · {} approved · {} billable · {} entries to review\n",
-        hours(report.total_min),
-        hours(report.approved_min),
-        hours(report.billable_min),
-        report.review_count
-    );
+    write_totals(&mut out, report, counted.len());
+    write_projects(&mut out, report);
+    write_tickets(&mut out, &counted);
+    write_days(&mut out, monday, &counted, days);
+    write_journal(&mut out, journals);
+    write_open(&mut out, &counted);
+    out
+}
 
-    if !report.by_project.is_empty() {
-        let _ = writeln!(out, "## Projects\n\n| Project | Time |\n|---|---:|");
-        for p in &report.by_project {
-            let _ = writeln!(out, "| {} | {} |", cell(&p.project), hours(p.min));
-        }
-        out.push('\n');
+fn write_totals(out: &mut String, report: &Report, entries: usize) {
+    let mut parts = vec![format!("**{}** of work in {entries} entries", hours(report.total_min))];
+    if report.billable_min > 0 {
+        parts.push(format!("{} billable", hours(report.billable_min)));
     }
+    parts.push(if report.approved_min > 0 { format!("{} approved", hours(report.approved_min)) } else { "none approved yet".into() });
+    let _ = writeln!(out, "{}\n", parts.join(" · "));
+}
 
+fn write_projects(out: &mut String, report: &Report) {
+    if report.by_project.is_empty() {
+        return;
+    }
+    let total = report.by_project.iter().map(|p| p.min).sum::<i64>().max(1);
+    let _ = writeln!(out, "## Projects\n\n| Project | Time | Share |\n|---|---:|---:|");
+    for p in &report.by_project {
+        let pct = (p.min * 100 + total / 2) / total;
+        let share = if pct == 0 { "<1%".to_string() } else { format!("{pct}%") };
+        let _ = writeln!(out, "| {} | {} | {share} |", cell(&p.project), hours(p.min));
+    }
+    out.push('\n');
+}
+
+/// Time per ticket, longest first, with the time on no ticket last. The epic column appears
+/// only when some ticket has an epic.
+fn write_tickets(out: &mut String, counted: &[&ReportEntry]) {
     let mut by_ticket: BTreeMap<String, (String, String, i64)> = BTreeMap::new();
     let mut untracked = 0;
-    for e in &counted {
+    for e in counted {
         match ticket_of(e) {
             Some((key, title, epic)) => by_ticket.entry(key).or_insert((title, epic, 0)).2 += e.duration_min,
             None => untracked += e.duration_min,
         }
     }
-    if !by_ticket.is_empty() || untracked > 0 {
-        let mut rows: Vec<_> = by_ticket.into_iter().collect();
-        rows.sort_by_key(|(_, (_, _, min))| -min);
-        let _ = writeln!(out, "## Tickets\n\n| Ticket | Title | Epic | Time |\n|---|---|---|---:|");
-        for (key, (title, epic, min)) in rows {
-            let _ = writeln!(out, "| {} | {} | {} | {} |", cell(&key), cell(&title), cell(&epic), hours(min));
-        }
-        if untracked > 0 {
-            let _ = writeln!(out, "| (no ticket) | | | {} |", hours(untracked));
-        }
-        out.push('\n');
+    if by_ticket.is_empty() && untracked == 0 {
+        return;
     }
+    let mut rows: Vec<_> = by_ticket.into_iter().collect();
+    rows.sort_by_key(|(_, (_, _, min))| -min);
+    let epics = rows.iter().any(|(_, (_, epic, _))| !epic.is_empty());
+    let _ = if epics {
+        writeln!(out, "## Tickets\n\n| Ticket | Title | Epic | Time |\n|---|---|---|---:|")
+    } else {
+        writeln!(out, "## Tickets\n\n| Ticket | Title | Time |\n|---|---|---:|")
+    };
+    for (key, (title, epic, min)) in rows {
+        let epic = if epics { format!(" {} |", cell(&epic)) } else { String::new() };
+        let _ = writeln!(out, "| {} | {} |{epic} {} |", cell(&key), cell(&title), hours(min));
+    }
+    if untracked > 0 {
+        let _ = writeln!(out, "| *No ticket* | |{} {} |", if epics { " |" } else { "" }, hours(untracked));
+    }
+    out.push('\n');
+}
 
-    if !days.is_empty() {
+/// Time worked each day that has any, with the schedule and unaccounted time when a schedule is set.
+fn write_days(out: &mut String, monday: NaiveDate, counted: &[&ReportEntry], days: &[DaySchedule]) {
+    let rows: Vec<(String, i64, Option<&DaySchedule>)> = (0..7)
+        .map(|i| (monday + Duration::days(i)).format("%Y-%m-%d").to_string())
+        .map(|day| {
+            let worked = counted.iter().filter(|e| e.day == day).map(|e| e.duration_min).sum();
+            let schedule = days.iter().find(|d| d.day == day);
+            (day, worked, schedule)
+        })
+        .filter(|(_, worked, schedule)| *worked > 0 || schedule.is_some())
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    if days.is_empty() {
+        let _ = writeln!(out, "## Days\n\n| Day | Worked |\n|---|---:|");
+    } else {
         let _ = writeln!(out, "## Days\n\n| Day | Worked | Schedule | Unaccounted |\n|---|---:|---:|---:|");
-        for d in days {
-            let worked: i64 = counted.iter().filter(|e| e.day == d.day).map(|e| e.duration_min).sum();
-            let _ = writeln!(out, "| {} | {} | {} | {} |", d.day, hours(worked), hours(d.schedule_min), hours(d.unaccounted_min));
+    }
+    for (day, worked, schedule) in rows {
+        let extra = match (days.is_empty(), schedule) {
+            (true, _) => String::new(),
+            (false, Some(d)) => format!(" {} | {} |", hours(d.schedule_min), hours(d.unaccounted_min)),
+            (false, None) => " – | – |".into(),
+        };
+        let _ = writeln!(out, "| {} | {} |{extra}", day_name(&day), hours(worked));
+    }
+    out.push('\n');
+}
+
+fn write_journal(out: &mut String, journals: &[(String, Vec<String>)]) {
+    if journals.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "## Journal\n");
+    for (day, lines) in journals {
+        let _ = writeln!(out, "### {}\n", day_name(day));
+        for l in lines {
+            let _ = writeln!(out, "- {}", l.replace('\n', " "));
         }
         out.push('\n');
     }
+}
 
-    if !journals.is_empty() {
-        let _ = writeln!(out, "## Journal\n");
-        for (day, lines) in journals {
-            let _ = writeln!(out, "### {day}\n");
-            for l in lines {
-                let _ = writeln!(out, "- {}", l.replace('\n', " "));
-            }
-            out.push('\n');
-        }
+/// The entries without a ticket, longest first, and one line for what is still unapproved.
+fn write_open(out: &mut String, counted: &[&ReportEntry]) {
+    let mut untracked: Vec<&&ReportEntry> = counted.iter().filter(|e| ticket_of(e).is_none()).collect();
+    let unapproved: Vec<&&ReportEntry> = counted.iter().filter(|e| !e.approved).collect();
+    if untracked.is_empty() && unapproved.is_empty() {
+        return;
     }
-
-    let open: Vec<&&ReportEntry> = counted.iter().filter(|e| !e.approved || ticket_of(e).is_none()).collect();
-    if !open.is_empty() {
-        let _ = writeln!(out, "## Needs attention\n");
-        for e in open {
-            let mut why = e.reasons.clone();
-            if ticket_of(e).is_none() {
-                why.push("No ticket".into());
-            }
-            let _ = writeln!(out, "- {} · {} · {} · {} — {}", e.day, hours(e.duration_min), e.project.as_deref().unwrap_or("No project"), e.label.replace('\n', " "), why.join(", "));
-        }
+    let _ = writeln!(out, "## Needs attention\n");
+    if !unapproved.is_empty() {
+        let min: i64 = unapproved.iter().map(|e| e.duration_min).sum();
+        let which = if unapproved.len() == counted.len() {
+            format!("None of the {} entries ({}) is approved yet", counted.len(), hours(min))
+        } else {
+            format!("{} of {} entries ({}) are not approved yet", unapproved.len(), counted.len(), hours(min))
+        };
+        let _ = writeln!(out, "{which}; approve them in Reports.\n");
     }
-    out
+    if !untracked.is_empty() {
+        untracked.sort_by_key(|e| (-e.duration_min, e.day.clone()));
+        let _ = writeln!(out, "**Without a ticket**\n");
+        for e in untracked {
+            let project = e.project.as_deref().unwrap_or("No project");
+            let label = crate::event::clip(&e.label.replace('\n', " "), 90);
+            let _ = writeln!(out, "- {} · {} · {project} · {label}", day_name(&e.day), hours(e.duration_min));
+        }
+        out.push('\n');
+    }
 }
 
 #[cfg(test)]
@@ -177,12 +253,12 @@ mod tests {
     #[test]
     fn renders_an_empty_week() {
         let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
-        let q = ReportQuery { from: "2026-10-19".into(), to: "2026-10-25".into(), grouping: Grouping::TicketDay, tickets: TicketMode::Prefix, context: ContextFilter::Work };
+        let q = ReportQuery { from: "2026-10-19".into(), to: "2026-10-25".into(), grouping: Grouping::TicketDay, tickets: TicketMode::Prefix, context: ContextFilter::Work, fit_day_min: None };
         let store = crate::store::Store::open_in_memory().unwrap();
         let report = reports::build(&store, &q).unwrap();
         let md = render(monday, &report, &[], &[]);
         assert!(md.starts_with("# 2026-W43 · Mon 19 Oct to Sun 25 Oct 2026"));
-        assert!(md.contains("**0h00** of work"));
+        assert!(md.contains("**0m** of work in 0 entries"));
         assert!(!md.contains("## Tickets"));
     }
 }

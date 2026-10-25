@@ -6,6 +6,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
+use super::shell_refs::{self, PrEvent};
 use super::{content_text, is_human_prompt, is_test_command, parse_test_counts};
 use crate::event::{clip, kind, WorkEvent};
 
@@ -134,6 +135,7 @@ pub fn parse_file(path: &Path, since: DateTime<Utc>) -> Result<Vec<WorkEvent>> {
             Some("assistant") => {
                 if let Some(Value::Array(blocks)) = content {
                     for b in blocks.iter().filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_use")) {
+                        out.extend(gh_pr_events(b, ts, &cwd));
                         out.push(tool_event(b, ts, &cwd, &branch, &mut pending));
                     }
                 }
@@ -174,6 +176,19 @@ fn tool_event(
         .or_else(|| cwd.clone());
     e.branch = branch.clone();
     e
+}
+
+/// The pull requests a Bash tool call changed or read with `gh pr`.
+fn gh_pr_events(b: &Value, ts: DateTime<Utc>, cwd: &Option<String>) -> Vec<WorkEvent> {
+    let Some(command) = b.pointer("/input/command").and_then(Value::as_str).filter(|_| b.get("name").and_then(Value::as_str) == Some("Bash"))
+    else {
+        return Vec::new();
+    };
+    let call_id = b.get("id").and_then(Value::as_str).unwrap_or_default();
+    shell_refs::pr_commands(command)
+        .iter()
+        .map(|pr| shell_refs::pr_event(PrEvent { source: SOURCE, call_id, pr, ts, path: cwd }))
+        .collect()
 }
 
 /// A pull request the session opened or pushed to, recorded by Claude Code as a `pr-link`.

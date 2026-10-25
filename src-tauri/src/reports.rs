@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::Result;
-use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::contexts::Context;
@@ -61,6 +61,10 @@ pub struct ReportQuery {
     pub tickets: TicketMode,
     #[serde(default)]
     pub context: ContextFilter,
+    /// Fits each work day's entries to this many minutes, for time sheets that expect full days.
+    /// `None` reports the measured time.
+    #[serde(default)]
+    pub fit_day_min: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,6 +73,9 @@ pub struct ReportEntry {
     pub day: String,
     pub start_ts: i64,
     pub duration_min: i64,
+    /// The measured minutes, before `fit_day_min` scaled the entry. Equal to `duration_min`
+    /// when the day was not fitted.
+    pub measured_min: i64,
     pub project: Option<String>,
     pub toggl_project: String,
     pub client: String,
@@ -364,6 +371,7 @@ fn build_entry(key: String, group: Vec<&Loaded>, cx: &EntryContext) -> ReportEnt
         day: first.session.day.clone(),
         start_ts: first.session.start_ts,
         duration_min: group.iter().map(|l| l.report_min + l.gap_min).sum(),
+        measured_min: group.iter().map(|l| l.report_min + l.gap_min).sum(),
         gap_min: group.iter().map(|l| l.gap_min).sum(),
         pending_bridge_min: group.iter().map(|l| l.pending_min).sum(),
         parallel_min: group.iter().map(|l| l.session.active_min - l.report_min).sum::<i64>().max(0),
@@ -399,6 +407,10 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
     let mut entries: Vec<ReportEntry> =
         groups.into_iter().map(|(k, g)| build_entry(k, g, &cx)).filter(|e| e.duration_min > 0).collect();
     entries.sort_by_key(|e| e.start_ts);
+    if let Some(target) = q.fit_day_min.filter(|m| *m > 0) {
+        let work_days = settings.schedule.as_ref().map_or_else(|| vec![0, 1, 2, 3, 4], |s| s.days.clone());
+        fit_days(&mut entries, target, &work_days);
+    }
 
     let mut by_project: BTreeMap<String, i64> = BTreeMap::new();
     for e in entries.iter().filter(|e| !e.skip) {
@@ -418,6 +430,75 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
         query: q.clone(),
         entries,
     })
+}
+
+/// Scales each work day's entries in proportion so the day adds up to `target` minutes, in
+/// 5-minute steps when `target` allows, then lays them back to back from the day's first start
+/// so no two overlap. Entries mapped to "never send" keep their time and do not count. Entries
+/// already sent to Toggl keep their time and count toward the day. Days off the schedule's work
+/// days (Monday to Friday without a schedule) and days already at or past `target` once sent
+/// time is taken out keep their measured time.
+/// @param work_days 0 = Monday … 6 = Sunday.
+fn fit_days(entries: &mut [ReportEntry], target: i64, work_days: &[u32]) {
+    let mut days: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, e) in entries.iter().enumerate().filter(|(_, e)| !e.skip) {
+        days.entry(e.day.clone()).or_default().push(i);
+    }
+    for (day, idx) in days {
+        let weekday = NaiveDate::parse_from_str(&day, "%Y-%m-%d").map(|d| d.weekday().num_days_from_monday());
+        if !weekday.is_ok_and(|w| work_days.contains(&w)) {
+            continue;
+        }
+        let sent: i64 = idx.iter().filter(|&&i| entries[i].sent).map(|&i| entries[i].duration_min).sum();
+        let open: Vec<usize> = idx.iter().copied().filter(|&i| !entries[i].sent).collect();
+        let measured: Vec<i64> = open.iter().map(|&i| entries[i].duration_min).collect();
+        let Some(fitted) = scale_to(&measured, target - sent) else { continue };
+        for (&i, min) in open.iter().zip(fitted) {
+            entries[i].duration_min = min;
+        }
+        lay_back_to_back(entries, &open);
+    }
+}
+
+/// `parts` scaled to sum to `total`, in 5-minute steps when `total` is a multiple of 5 (else
+/// 1-minute steps), by largest remainder, with every non-zero part kept above zero when there
+/// are enough steps. `None` when there is nothing to scale or `total` is not positive.
+fn scale_to(parts: &[i64], total: i64) -> Option<Vec<i64>> {
+    let sum: i64 = parts.iter().sum();
+    if sum <= 0 || total <= 0 {
+        return None;
+    }
+    let unit = if total % 5 == 0 { 5 } else { 1 };
+    let steps = total / unit;
+    let exact: Vec<f64> = parts.iter().map(|&p| p as f64 * steps as f64 / sum as f64).collect();
+    let mut out: Vec<i64> = exact.iter().map(|x| x.floor() as i64).collect();
+    let mut order: Vec<usize> = (0..parts.len()).collect();
+    order.sort_by(|&a, &b| (exact[b] - exact[b].floor()).total_cmp(&(exact[a] - exact[a].floor())));
+    let left = steps - out.iter().sum::<i64>();
+    for &i in order.iter().cycle().take(left.max(0) as usize) {
+        out[i] += 1;
+    }
+    for i in 0..out.len() {
+        if out[i] == 0 && parts[i] > 0 {
+            let biggest = (0..out.len()).max_by_key(|&j| out[j]).unwrap();
+            if out[biggest] > 1 {
+                out[biggest] -= 1;
+                out[i] = 1;
+            }
+        }
+    }
+    Some(out.into_iter().map(|s| s * unit).collect())
+}
+
+/// Moves each of `idx` (in start order) to start no earlier than the previous one ends.
+fn lay_back_to_back(entries: &mut [ReportEntry], idx: &[usize]) {
+    let mut order = idx.to_vec();
+    order.sort_by_key(|&i| entries[i].start_ts);
+    let mut cursor = i64::MIN;
+    for i in order {
+        entries[i].start_ts = entries[i].start_ts.max(cursor);
+        cursor = entries[i].start_ts + entries[i].duration_min * 60_000;
+    }
 }
 
 /// Sessions safe to approve in one step: high confidence, with a project, not hidden.
@@ -474,6 +555,44 @@ pub fn to_csv(report: &Report, email: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(day: &str, start: &str, min: i64) -> ReportEntry {
+        let start_ts = Local.from_local_datetime(&chrono::NaiveDateTime::parse_from_str(&format!("{day} {start}"), "%Y-%m-%d %H:%M").unwrap()).unwrap().timestamp_millis();
+        ReportEntry {
+            key: format!("{day}{start}"), day: day.into(), start_ts, duration_min: min, measured_min: min, project: None,
+            toggl_project: String::new(), client: String::new(), billable: false, skip: false, context: Context::Work,
+            label: String::new(), description: String::new(), tags: vec![], jira: None, jira_info: None, github: None,
+            github_info: None, suggestion: None, session_ids: vec![], approved: false, reasons: vec![], sent: false,
+            parallel_min: 0, gap_min: 0, pending_bridge_min: 0,
+        }
+    }
+
+    #[test]
+    fn scales_parts_to_an_exact_total_in_five_minute_steps() {
+        assert_eq!(scale_to(&[60, 30, 10], 480), Some(vec![290, 145, 45]));
+        assert_eq!(scale_to(&[200, 1], 480).unwrap().iter().sum::<i64>(), 480);
+        assert_eq!(scale_to(&[200, 1], 480).unwrap()[1], 5, "a short entry keeps a step");
+        assert_eq!(scale_to(&[50, 50], 457), Some(vec![229, 228]));
+        assert_eq!(scale_to(&[0, 0], 480), None);
+    }
+
+    #[test]
+    fn fits_work_days_and_leaves_weekends_and_sent_time() {
+        let mut entries = vec![
+            entry("2026-10-19", "09:00", 120),
+            entry("2026-10-19", "09:30", 60),
+            entry("2026-10-24", "10:00", 25),
+            entry("2026-10-20", "09:00", 60),
+            entry("2026-10-20", "11:00", 60),
+        ];
+        entries[3].sent = true;
+        fit_days(&mut entries, 480, &[0, 1, 2, 3, 4]);
+        assert_eq!((entries[0].duration_min, entries[1].duration_min), (320, 160));
+        assert_eq!(entries[1].start_ts, entries[0].start_ts + 320 * 60_000, "laid back to back");
+        assert_eq!(entries[2].duration_min, 25, "Saturday keeps its measured time");
+        assert_eq!((entries[3].duration_min, entries[4].duration_min), (60, 420), "sent time counts and stays");
+        assert_eq!(entries[0].measured_min, 120);
+    }
 
     fn choices(auto: bool) -> TicketChoices {
         let s = StoredSuggestion { ticket: "SHOP-7".into(), reason: "links api#3 in Jira".into(), by_ai: false, via: Some("api#3".into()), auto };

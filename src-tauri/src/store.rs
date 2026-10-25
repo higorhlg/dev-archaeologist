@@ -80,8 +80,12 @@ pub struct StoredSuggestion {
     pub auto: bool,
 }
 
+/// The database the app and `dev-arch` open: `DEV_ARCH_DB` when set, else
+/// `~/Library/Application Support/dev-archaeologist/devarch.db`.
 pub fn default_db_path() -> PathBuf {
-    dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("dev-archaeologist").join("devarch.db")
+    std::env::var("DEV_ARCH_DB").map(PathBuf::from).unwrap_or_else(|_| {
+        dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("dev-archaeologist").join("devarch.db")
+    })
 }
 
 fn event_from_row(r: &rusqlite::Row) -> rusqlite::Result<WorkEvent> {
@@ -180,9 +184,9 @@ impl Store {
     }
 
     /// Inserts events. An event whose `(source, source_id)` is already stored is kept as it is,
-    /// except that it takes the new `meta` when it had none, so a re-scan adds facts a newer
-    /// adapter reads.
-    /// @returns the number of rows added or given meta.
+    /// except that it takes the new `meta` and `branch` where it had none, so a re-scan adds
+    /// facts a newer adapter reads.
+    /// @returns the number of rows added or filled in.
     pub fn insert_events(&self, events: &[WorkEvent]) -> Result<usize> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
@@ -190,8 +194,10 @@ impl Store {
         {
             let mut stmt = tx.prepare_cached(&format!(
                 "INSERT INTO work_events ({EVENT_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
-                 ON CONFLICT (source, source_id) DO UPDATE SET meta = excluded.meta
-                 WHERE work_events.meta IS NULL AND excluded.meta IS NOT NULL"
+                 ON CONFLICT (source, source_id) DO UPDATE
+                 SET meta = COALESCE(work_events.meta, excluded.meta), branch = COALESCE(work_events.branch, excluded.branch)
+                 WHERE (work_events.meta IS NULL AND excluded.meta IS NOT NULL)
+                    OR (work_events.branch IS NULL AND excluded.branch IS NOT NULL)"
             ))?;
             for e in events {
                 let meta = if e.meta.is_null() { None } else { Some(e.meta.to_string()) };

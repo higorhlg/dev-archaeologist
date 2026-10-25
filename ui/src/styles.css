@@ -218,6 +218,11 @@ input[role="switch"]:checked::after { left: 16px; }
 .reports { max-width: 980px; }
 .report-controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
 .report-controls .seg { grid-column: auto; grid-row: auto; }
+.fit-days { display: flex; align-items: center; gap: 8px; font-weight: 500; cursor: pointer; }
+.fit-days input[role="switch"] { margin-top: 0; }
+.fit-days input[type="number"] { width: 64px; border: 1px solid var(--rule); border-radius: 7px; padding: 5px 6px; background: var(--paper); color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
+small.measured { display: block; color: var(--muted); font-size: 11.5px; font-weight: 400; white-space: nowrap; }
+h2 small.measured { display: inline; font-size: 12.5px; }
 .summary-strip { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; display: grid; gap: 10px; }
 .summary-strip p { color: var(--ink-2); }
 .summary-strip b { color: var(--ink); }

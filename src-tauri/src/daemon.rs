@@ -89,7 +89,7 @@ const MIN_LOOK_BACK: chrono::Duration = chrono::Duration::days(1);
 
 /// Bumped when adapters start reading new facts from logs already stored, so the next catch-up
 /// reads the whole history window again and existing events gain them.
-const EVIDENCE_VERSION: i64 = 2;
+const EVIDENCE_VERSION: i64 = 3;
 
 /// Reads every source since the last successful poll (at least one day back, at most 90),
 /// rebuilds the days in between, and records the poll. Before the user ran the history import

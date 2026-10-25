@@ -113,11 +113,22 @@ pub struct ReportPrefs {
     pub grouping: Grouping,
     pub tickets: TicketMode,
     pub context: ContextFilter,
+    /// Fit each work day to `fit_hours` in Reports and its exports.
+    pub fit_day: bool,
+    /// The day length "Fit days" uses, kept while fitting is off.
+    pub fit_hours: f64,
 }
 
 impl Default for ReportPrefs {
     fn default() -> Self {
-        Self { range: "this_week".into(), grouping: Grouping::TicketDay, tickets: TicketMode::Prefix, context: ContextFilter::Work }
+        Self {
+            range: "this_week".into(),
+            grouping: Grouping::TicketDay,
+            tickets: TicketMode::Prefix,
+            context: ContextFilter::Work,
+            fit_day: false,
+            fit_hours: 8.0,
+        }
     }
 }
 

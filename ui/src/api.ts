@@ -71,7 +71,7 @@ export type Grouping = "session" | "ticket_day" | "project_day";
 export type TicketMode = "prefix" | "tag" | "off";
 export type Context = "work" | "personal";
 export type ContextFilter = Context | "all";
-export type ReportPrefs = { range: string; grouping: Grouping; tickets: TicketMode; context: ContextFilter };
+export type ReportPrefs = { range: string; grouping: Grouping; tickets: TicketMode; context: ContextFilter; fit_day: boolean; fit_hours: number };
 export type ContextRules = {
   work_paths: string[];
   personal_paths: string[];
@@ -142,12 +142,15 @@ export type Status = {
 };
 
 export type Ticket = { key: string; source: string };
-export type ReportQuery = { from: string; to: string; grouping: Grouping; tickets: TicketMode; context: ContextFilter };
+/** `fit_day_min` scales each work day's entries to that many minutes; null reports measured time. */
+export type ReportQuery = { from: string; to: string; grouping: Grouping; tickets: TicketMode; context: ContextFilter; fit_day_min?: number | null };
 export type ReportEntry = {
   key: string;
   day: string;
   start_ts: number;
   duration_min: number;
+  /** The measured minutes before the day was fitted; equal to `duration_min` otherwise. */
+  measured_min: number;
   project: string | null;
   toggl_project: string;
   client: string;

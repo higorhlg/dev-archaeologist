@@ -306,7 +306,8 @@ fn fetch_candidates(settings: &Settings, range: &DayRange, repos: &[String], res
 }
 
 /// Session labels, branch, agent titles, prompts, commit subjects, meeting titles and the
-/// pull requests agent sessions linked.
+/// pull requests agent sessions opened or acted on. Pull requests an agent only looked at are
+/// left out, so a status check on another PR cannot name the entry's ticket.
 fn evidence_text(sessions: &[&Session], events: &[WorkEvent]) -> String {
     let mut parts: Vec<String> = Vec::new();
     for s in sessions {
@@ -318,7 +319,8 @@ fn evidence_text(sessions: &[&Session], events: &[WorkEvent]) -> String {
     parts.extend(of(kind::AI_TITLE));
     parts.extend(of(kind::COMMIT));
     parts.extend(of(kind::MEETING));
-    parts.extend(of(kind::PR_LINK));
+    let only_read = |e: &WorkEvent| e.meta.get("action").and_then(|a| a.as_str()) == Some("read");
+    parts.extend(events.iter().filter(|e| e.kind == kind::PR_LINK && !only_read(e)).filter_map(|e| e.detail.clone()));
     parts.extend(of(kind::PROMPT).take(MAX_PROMPTS).map(|p| clip(&p, 200)));
     let mut seen = BTreeSet::new();
     parts.retain(|p| seen.insert(p.clone()));

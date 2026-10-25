@@ -82,8 +82,8 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
 
   const [from, to] = rangeDays(prefs.range);
   const query: ReportQuery = useMemo(
-    () => ({ from, to, grouping: prefs.grouping, tickets: prefs.tickets, context: side }),
-    [from, to, prefs.grouping, prefs.tickets, side],
+    () => ({ from, to, grouping: prefs.grouping, tickets: prefs.tickets, context: side, fit_day_min: prefs.fit_day ? Math.round(prefs.fit_hours * 60) : null }),
+    [from, to, prefs.grouping, prefs.tickets, side, prefs.fit_day, prefs.fit_hours],
   );
 
   const load = useCallback(() => {
@@ -155,6 +155,7 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
         <Seg label="Range" options={RANGES} value={prefs.range} onChange={(range) => applyPrefs({ ...prefs, range })} />
         <Seg label="Entries" options={GROUPINGS} value={prefs.grouping} onChange={(grouping) => applyPrefs({ ...prefs, grouping })} />
         <Seg label="Tickets" options={TICKET_MODES} value={prefs.tickets} onChange={(tickets) => applyPrefs({ ...prefs, tickets })} />
+        <FitDays prefs={prefs} onChange={applyPrefs} />
       </div>
 
       {report && <Summary report={report} />}
@@ -199,7 +200,7 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
         <section className="report-day" key={day}>
           <h2>
             <button className="link" onClick={() => onOpenDay(day)}>{longDay(day)}</button>
-            <span className="num">{minutes(entries.filter((e) => !e.skip).reduce((n, e) => n + e.duration_min, 0))}</span>
+            <DayTotal entries={entries.filter((e) => !e.skip)} />
           </h2>
           {schedule.find((d) => d.day === day) && (
             <DayAgainstSchedule d={schedule.find((d) => d.day === day)!} fillDefault={status.settings.schedule?.fill_project ?? null}
@@ -213,6 +214,40 @@ export default function Reports({ status, side, onSaved, onOpenDay, goToSources 
         </section>
       ))}
     </div>
+  );
+}
+
+/**
+ * The "Fit days to N h" switch and its hours field. Fitting scales each work day's entries to
+ * N hours in the report, the CSV and Toggl; the field keeps its value while the switch is off.
+ */
+function FitDays({ prefs, onChange }: { prefs: ReportPrefs; onChange: (next: ReportPrefs) => void }) {
+  const [hours, setHours] = useState(String(prefs.fit_hours));
+  const commit = () => {
+    const n = Number(hours);
+    if (n >= 0.5 && n <= 24 && n !== prefs.fit_hours) onChange({ ...prefs, fit_hours: n });
+    else setHours(String(prefs.fit_hours));
+  };
+  return (
+    <label className="fit-days" title="Scale each work day's entries so the day adds up to this many hours. Weekends and days off your schedule keep their measured time.">
+      <input type="checkbox" role="switch" checked={prefs.fit_day} onChange={(e) => onChange({ ...prefs, fit_day: e.target.checked })} />
+      <span>Fit days to</span>
+      <input type="number" min={0.5} max={24} step={0.5} value={hours} aria-label="Hours per day"
+        onChange={(e) => setHours(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === "Enter" && commit()} />
+      <span>h</span>
+    </label>
+  );
+}
+
+/** A day's reported time, with the measured time beside it when the day was fitted. */
+function DayTotal({ entries }: { entries: ReportEntry[] }) {
+  const reported = entries.reduce((n, e) => n + e.duration_min, 0);
+  const measured = entries.reduce((n, e) => n + e.measured_min, 0);
+  return (
+    <span className="num">
+      {measured !== reported && <small className="measured">measured {minutes(measured)} · </small>}
+      {minutes(reported)}
+    </span>
   );
 }
 
@@ -248,7 +283,9 @@ function useSyncWatch(onStatus: (s: TicketSyncStatus | null) => void, reload: ()
 
 /** When tickets last synced on their own, what changed, and what failed. */
 function SyncLine({ s }: { s: TicketSyncStatus }) {
-  const what = s.checked === 0 ? "every entry had a ticket" : `${s.applied} applied, ${s.suggested - s.applied} suggested of ${s.checked} without one`;
+  const fresh = s.suggested - s.applied;
+  const found = [s.applied > 0 && `${s.applied} applied`, fresh > 0 && `${fresh} new ${fresh === 1 ? "suggestion" : "suggestions"}`].filter(Boolean).join(", ");
+  const what = s.checked === 0 ? "every entry had a ticket" : `${found || "nothing new"} for ${s.checked} ${s.checked === 1 ? "entry" : "entries"} without a ticket`;
   return (
     <p className="muted sync-line">
       Tickets synced on their own at {hhmm(s.at_ms)} for {longDay(s.from)} to {longDay(s.to)}: {what}.
@@ -269,6 +306,7 @@ function Seg<T extends string>({ label, options, value, onChange }: { label: str
 
 function Summary({ report }: { report: Report }) {
   const total = Math.max(1, report.total_min);
+  const measured = report.entries.filter((e) => !e.skip).reduce((n, e) => n + e.measured_min, 0);
   return (
     <section className="summary-strip">
       <p>
@@ -276,6 +314,9 @@ function Summary({ report }: { report: Report }) {
         {report.review_count > 0 && <>, {report.review_count} {report.review_count === 1 ? "entry needs" : "entries need"} review</>}.
         {report.parallel_min > 0 && (
           <span className="muted"> Parallel agent sessions shared {minutes(report.parallel_min)}, counted once.</span>
+        )}
+        {measured !== report.total_min && (
+          <span className="muted"> Work days fitted to {minutes(report.query.fit_day_min ?? 0)} each; measured {minutes(measured)}.</span>
         )}
       </p>
       <div className="stack" aria-label="Time by project">
@@ -326,6 +367,7 @@ function EntryRow({ e, grouping, run }: { e: ReportEntry; grouping: Grouping; ru
       <span className="when num">
         {hhmm(e.start_ts)}
         <b>{minutes(e.duration_min)}</b>
+        {e.measured_min !== e.duration_min && <small className="measured" title={`Measured ${minutes(e.measured_min)}, fitted to the day`}>from {minutes(e.measured_min)}</small>}
       </span>
       <span className="body">
         <span className="line1">

@@ -36,11 +36,33 @@ const AGENT_JIRA_WRITE: u32 = 4;
 /// An agent opened the Jira ticket to read it.
 const AGENT_JIRA_READ: u32 = 2;
 /// The agent session opened or pushed to this pull request.
-const AGENT_PR: u32 = 4;
+const AGENT_PR_OPEN: u32 = 4;
+/// The agent session edited, commented on, reviewed, merged or checked out this pull request.
+const AGENT_PR_WRITE: u32 = 3;
+/// The agent session only looked at this pull request (`gh pr view`, `diff`, `checks`).
+const AGENT_PR_READ: u32 = 2;
+/// The agent session only looked at a pull request in a repo other than the session's project.
+const AGENT_PR_READ_ELSEWHERE: u32 = 1;
 
 fn jira_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b").unwrap())
+}
+
+/// A Jira key in any case, such as `shop-1068` in `feat/shop-1068-pricing`.
+fn any_case_key_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?i)\b([a-z][a-z0-9]{1,9})-(\d{1,6})\b").unwrap())
+}
+
+/// The Jira keys in a branch name, uppercased. An uppercase key always counts; a lowercase one
+/// such as `shop-1068` counts when its prefix is in `prefixes`, so `fix-2` names no ticket.
+fn branch_keys(branch: &str, prefixes: &BTreeSet<String>) -> Vec<String> {
+    any_case_key_re()
+        .captures_iter(branch)
+        .filter(|c| jira_re().is_match(&c[0]) || prefixes.contains(&c[1].to_uppercase()))
+        .map(|c| c[0].to_uppercase())
+        .collect()
 }
 
 /// `fix(SHOP-1261): …`, `SHOP-1261: …`, `[SHOP-1261] …` — a key in the scope position of a commit.
@@ -148,13 +170,14 @@ pub fn detect(events: &[WorkEvent], branch: Option<&str>, project: Option<&str>,
 
     let branches: BTreeSet<&str> = events.iter().filter_map(|e| e.branch.as_deref()).chain(branch).collect();
     for b in branches {
-        for c in jira_re().captures_iter(b) {
-            t.add(c[0].to_string(), BRANCH, "branch");
+        for key in branch_keys(b, prefixes) {
+            t.add(key, BRANCH, "branch");
         }
         for c in branch_issue_re().captures_iter(b) {
             t.add(gh(&c[1]), BRANCH, "branch");
         }
     }
+    let mut agent_prs: HashMap<&str, u32> = HashMap::new();
     for e in events {
         if let Some((key, action)) = agent_jira_target(e) {
             t.add(key.to_string(), if action == "write" { AGENT_JIRA_WRITE } else { AGENT_JIRA_READ }, "agent");
@@ -162,7 +185,11 @@ pub fn detect(events: &[WorkEvent], branch: Option<&str>, project: Option<&str>,
         }
         let Some(text) = e.detail.as_deref() else { continue };
         match e.kind.as_str() {
-            kind::PR_LINK => t.add(text.to_string(), AGENT_PR, "agent"),
+            kind::PR_LINK => {
+                let weight = agent_pr_weight(e, text, project);
+                let best = agent_prs.entry(text).or_default();
+                *best = (*best).max(weight);
+            }
             kind::COMMIT => {
                 if let Some(c) = scope_re().captures(text) {
                     if let Some(m) = c.get(1).or_else(|| c.get(2)) {
@@ -195,7 +222,29 @@ pub fn detect(events: &[WorkEvent], branch: Option<&str>, project: Option<&str>,
             _ => {}
         }
     }
+    for (key, weight) in agent_prs {
+        t.add(key.to_string(), weight, "agent");
+    }
     Detected { jira: t.winner(|k| !is_github_key(k)), github: t.winner(is_github_key) }
+}
+
+/// How much one agent sighting of the pull request `key` (`repo#N`) counts, by the event's
+/// `action`: `open` (or none, as in Claude Code's `pr-link`), `write` or `read`. Each pull request
+/// counts once per session at its strongest sighting, so checking a PR's status again and again
+/// does not outweigh the PR the session opened.
+fn agent_pr_weight(e: &WorkEvent, key: &str, project: Option<&str>) -> u32 {
+    match e.meta.get("action").and_then(|a| a.as_str()) {
+        Some("write") => AGENT_PR_WRITE,
+        Some("read") => {
+            let repo = key.split('#').next().unwrap_or_default();
+            if project.is_some_and(|p| p.eq_ignore_ascii_case(repo)) {
+                AGENT_PR_READ
+            } else {
+                AGENT_PR_READ_ELSEWHERE
+            }
+        }
+        _ => AGENT_PR_OPEN,
+    }
 }
 
 #[cfg(test)]
@@ -256,6 +305,36 @@ mod tests {
         let jira = found.jira.unwrap();
         assert_eq!((jira.key.as_str(), jira.source.as_str()), ("SHOP-1300", "agent"));
         assert_eq!(found.github.unwrap().key, "subscription-api#330");
+    }
+
+    #[test]
+    fn opened_pull_request_beats_ones_only_viewed() {
+        let viewed = |key: &str| {
+            let mut e = ev(kind::PR_LINK, key, None);
+            e.meta = serde_json::json!({ "action": "read" });
+            e
+        };
+        let opened = ev(kind::PR_LINK, "web-frontend#2400", None);
+        let mut reviewed = ev(kind::PR_LINK, "web-frontend#2100", None);
+        reviewed.meta = serde_json::json!({ "action": "write" });
+        let events = [viewed("web-frontend#2322"), viewed("web-frontend#2322"), viewed("web-frontend#2322"), reviewed, opened];
+        let found = detect(&events, None, Some("web-frontend"), &BTreeSet::new());
+        assert_eq!(found.github.unwrap().key, "web-frontend#2400");
+
+        let events = [viewed("admin-app#191"), viewed("web-frontend#2322")];
+        let found = detect(&events, None, Some("web-frontend"), &BTreeSet::new());
+        assert_eq!(found.github.unwrap().key, "web-frontend#2322", "a PR in the session's own repo wins");
+    }
+
+    #[test]
+    fn reads_lowercase_branch_keys_with_known_prefixes() {
+        let prefixes: BTreeSet<String> = ["SHOP".to_string()].into();
+        assert_eq!(branch_keys("feat/shop-1068-exact-pricing", &prefixes), vec!["SHOP-1068"]);
+        assert_eq!(branch_keys("shop-910/warehouse", &prefixes), vec!["SHOP-910"]);
+        assert_eq!(branch_keys("SKU-12-x", &prefixes), vec!["SKU-12"]);
+        assert!(branch_keys("fix-2-typo", &prefixes).is_empty());
+        let found = detect(&[], Some("feat/shop-1068-exact-pricing"), None, &prefixes);
+        assert_eq!(found.jira.unwrap().key, "SHOP-1068");
     }
 
     #[test]
