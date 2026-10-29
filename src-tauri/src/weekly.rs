@@ -44,7 +44,7 @@ pub fn write_week(p: &Pipeline, monday: NaiveDate) -> Result<PathBuf> {
         grouping: Grouping::TicketDay,
         tickets: TicketMode::Prefix,
         context: ContextFilter::Work,
-        fit_day_min: None,
+        fit_day_min: None, fit_drift_min: None,
     };
     let report = reports::build(&p.store, &q)?;
     let days = api::report_days(p, &q)?;
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn renders_an_empty_week() {
         let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
-        let q = ReportQuery { from: "2026-10-19".into(), to: "2026-10-25".into(), grouping: Grouping::TicketDay, tickets: TicketMode::Prefix, context: ContextFilter::Work, fit_day_min: None };
+        let q = ReportQuery { from: "2026-10-19".into(), to: "2026-10-25".into(), grouping: Grouping::TicketDay, tickets: TicketMode::Prefix, context: ContextFilter::Work, fit_day_min: None, fit_drift_min: None };
         let store = crate::store::Store::open_in_memory().unwrap();
         let report = reports::build(&store, &q).unwrap();
         let md = render(monday, &report, &[], &[]);

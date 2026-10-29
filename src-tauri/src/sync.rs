@@ -59,7 +59,7 @@ pub fn sync_tickets(store: &Store) -> Result<TicketSyncStatus> {
         grouping: Grouping::Session,
         tickets: TicketMode::Prefix,
         context: ContextFilter::Work,
-        fit_day_min: None,
+        fit_day_min: None, fit_drift_min: None,
     };
     let r = find::find_tickets(store, &q, false).unwrap_or_else(|err| find::FindResult { errors: vec![format!("{err:#}")], ..Default::default() });
     let status = TicketSyncStatus {

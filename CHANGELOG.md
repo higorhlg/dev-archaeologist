@@ -11,6 +11,9 @@ All notable changes to Dev Archaeologist. The format follows
 - `dev-arch report` takes `--fit HOURS` and `--csv [PATH]` (with `--include-unapproved` to
   write entries still waiting for approval), and prints each entry's laid-out times and the
   measured time beside the fitted one.
+- `dev-arch report --fit HOURS --drift MIN` lets each fitted day move up to about MIN minutes
+  from HOURS, toward how long that day's presence ran against the other days, in 5-minute
+  steps. The days together still add up to HOURS each. `ReportQuery.fit_drift_min` carries it.
 - `dev-arch sync` warns when the calendar source is on but the binary has no Calendar access,
   so meetings are not read.
 - `dev-arch calendar [connect | reimport]` shows Calendar access, asks macOS for it, and reads

@@ -5,8 +5,9 @@
 //!   dev-arch day [YYYY-MM-DD]    print one day's sessions and achievements
 //!   dev-arch journal YYYY-MM-DD  write the day's journal with the Claude API
 //!   dev-arch report FROM TO [session|ticket_day|project_day] [work|personal|all]
-//!                [--fit HOURS] [--csv [PATH]] [--include-unapproved]
-//!                fit work days to HOURS inside their presence windows; write the Toggl CSV
+//!                [--fit HOURS [--drift MIN]] [--csv [PATH]] [--include-unapproved]
+//!                fit work days to HOURS inside their presence windows, each day moving up to
+//!                about MIN minutes toward its presence; write the Toggl CSV
 //!   dev-arch find-tickets FROM TO [work|personal|all]  suggest tickets from Jira and GitHub
 //!   dev-arch schedule [HH:MM HH:MM | off]  set Mon–Fri hours with lunch 12–13
 //!   dev-arch gaps [YYYY-MM-DD]   print the day's gaps inside work hours
@@ -76,7 +77,7 @@ fn positional(args: &[String]) -> Vec<String> {
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--fit" => {
+            "--fit" | "--drift" => {
                 it.next();
             }
             "--csv" => {
@@ -89,7 +90,7 @@ fn positional(args: &[String]) -> Vec<String> {
     out
 }
 
-/// `report FROM TO [grouping] [context] [--fit HOURS] [--csv [PATH]] [--include-unapproved]`.
+/// `report FROM TO [grouping] [context] [--fit HOURS [--drift MIN]] [--csv [PATH]] [--include-unapproved]`.
 /// Prints each entry with its laid-out times; with `--csv`, writes the Toggl CSV of approved
 /// work entries (all work entries with `--include-unapproved`) to PATH or ~/Downloads.
 fn print_report(p: &Pipeline, args: &[String]) -> Result<()> {
@@ -103,6 +104,7 @@ fn print_report(p: &Pipeline, args: &[String]) -> Result<()> {
         tickets: devarch::reports::TicketMode::Prefix,
         context: serde_json::from_value(serde_json::json!(pos.get(5).map(String::as_str).unwrap_or("work")))?,
         fit_day_min: fit_hours.map(|h| (h * 60.0).round() as i64),
+        fit_drift_min: flag_value(args, "--drift").map(str::parse).transpose()?,
     };
     let r = api::report(p, &q)?;
     println!("{} min total · {} approved · {} to review · prefixes {:?}", r.total_min, r.approved_min, r.review_count, r.known_prefixes);
@@ -185,6 +187,7 @@ fn main() -> Result<()> {
                 tickets: devarch::reports::TicketMode::Prefix,
                 context: serde_json::from_value(serde_json::json!(args.get(4).map(String::as_str).unwrap_or("work")))?,
                 fit_day_min: None,
+                fit_drift_min: None,
             };
             let r = api::find_tickets(&p, &q)?;
             println!("checked {} · suggested {} ({} by AI) · {:?}", r.checked, r.suggested, r.by_ai, r.looked_in);

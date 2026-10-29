@@ -65,6 +65,11 @@ pub struct ReportQuery {
     /// `None` reports the measured time.
     #[serde(default)]
     pub fit_day_min: Option<i64>,
+    /// Lets each fitted day move up to this many minutes from `fit_day_min`, toward how long the
+    /// day's presence ran against the other days; the days still add up to `fit_day_min` each.
+    /// `None` fits every day to exactly `fit_day_min`.
+    #[serde(default)]
+    pub fit_drift_min: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -431,7 +436,9 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
     entries.sort_by_key(|e| e.start_ts);
     if let Some(target) = q.fit_day_min.filter(|m| *m > 0) {
         let work_days = settings.schedule.as_ref().map_or_else(|| vec![0, 1, 2, 3, 4], |s| s.days.clone());
-        let plan = FitPlan { target, work_days: &work_days, windows: &presence_windows(&loaded), meetings: &meeting_blocks(&loaded, q.grouping) };
+        let windows = presence_windows(&loaded);
+        let day_targets = drifted_targets(&windows, target, q.fit_drift_min.unwrap_or(0), &work_days);
+        let plan = FitPlan { target, day_targets: &day_targets, work_days: &work_days, windows: &windows, meetings: &meeting_blocks(&loaded, q.grouping) };
         fit_days(&mut entries, &plan);
         entries.sort_by_key(|e| e.start_ts);
     }
@@ -494,8 +501,10 @@ fn meeting_blocks(loaded: &[Loaded], grouping: Grouping) -> HashMap<String, Vec<
 
 /// How `fit_days` fits a report.
 struct FitPlan<'a> {
-    /// Minutes each work day adds up to.
+    /// Minutes each work day adds up to, unless `day_targets` names the day.
     target: i64,
+    /// Day → minutes that day adds up to, from `drifted_targets`.
+    day_targets: &'a BTreeMap<String, i64>,
     /// 0 = Monday … 6 = Sunday.
     work_days: &'a [u32],
     /// Day → presence windows from `presence_windows`.
@@ -504,7 +513,7 @@ struct FitPlan<'a> {
     meetings: &'a HashMap<String, Vec<(i64, i64)>>,
 }
 
-/// Fits each work day to `plan.target` minutes. Meeting entries take their calendar time and
+/// Fits each work day to its `plan.day_targets` minutes, else `plan.target`. Meeting entries take their calendar time and
 /// length and count toward the day. The other entries scale in proportion to fill the rest, in
 /// 5-minute steps when the rest allows, then are laid out without overlap inside the day's
 /// presence windows and around its meetings (see `lay_in_windows`). Entries mapped to "never
@@ -518,10 +527,10 @@ fn fit_days(entries: &mut [ReportEntry], plan: &FitPlan) {
         days.entry(e.day.clone()).or_default().push(i);
     }
     for (day, idx) in days {
-        let weekday = NaiveDate::parse_from_str(&day, "%Y-%m-%d").map(|d| d.weekday().num_days_from_monday());
-        if !weekday.is_ok_and(|w| plan.work_days.contains(&w)) {
+        if !is_work_day(&day, plan.work_days) {
             continue;
         }
+        let target = plan.day_targets.get(&day).copied().unwrap_or(plan.target);
         let sent: i64 = idx.iter().filter(|&&i| entries[i].sent).map(|&i| entries[i].duration_min).sum();
         let meeting_of = |e: &ReportEntry| plan.meetings.get(&e.key).filter(|_| !e.sent);
         let mut busy: Vec<(i64, i64)> = idx.iter().filter_map(|&i| meeting_of(&entries[i])).flatten().copied().collect();
@@ -529,7 +538,7 @@ fn fit_days(entries: &mut [ReportEntry], plan: &FitPlan) {
         let open: Vec<usize> = idx.iter().copied().filter(|&i| !entries[i].sent && meeting_of(&entries[i]).is_none()).collect();
         let measured: Vec<i64> = open.iter().map(|&i| entries[i].duration_min).collect();
         let meeting_min: i64 = busy.iter().map(|(s, e)| (e - s) / 60_000).sum();
-        let Some(fitted) = scale_to(&measured, plan.target - sent - meeting_min) else { continue };
+        let Some(fitted) = scale_to(&measured, target - sent - meeting_min) else { continue };
         for &i in &idx {
             if let Some(spans) = meeting_of(&entries[i]).cloned() {
                 pin_to_calendar(&mut entries[i], &spans);
@@ -540,6 +549,33 @@ fn fit_days(entries: &mut [ReportEntry], plan: &FitPlan) {
         }
         lay_in_windows(entries, &open, plan.windows.get(&day).map_or(&[][..], Vec::as_slice), &busy);
     }
+}
+
+/// @param work_days 0 = Monday … 6 = Sunday.
+fn is_work_day(day: &str, work_days: &[u32]) -> bool {
+    NaiveDate::parse_from_str(day, "%Y-%m-%d").is_ok_and(|d| work_days.contains(&d.weekday().num_days_from_monday()))
+}
+
+/// Each work day's fitted minutes when days may drift: `target` moved toward how long the day's
+/// presence ran against the mean of the work days, by about `drift` minutes at most, in 5-minute
+/// steps. The days together still add up to `target` each. Empty when `drift` is not positive.
+/// @param windows day → presence windows from `presence_windows`.
+fn drifted_targets(windows: &BTreeMap<String, Vec<(i64, i64)>>, target: i64, drift: i64, work_days: &[u32]) -> BTreeMap<String, i64> {
+    let presence: Vec<(&String, i64)> = windows
+        .iter()
+        .filter(|(day, _)| is_work_day(day, work_days))
+        .map(|(day, w)| (day, w.iter().map(|(s, e)| (e - s) / 60_000).sum()))
+        .collect();
+    if drift <= 0 || presence.is_empty() {
+        return BTreeMap::new();
+    }
+    let mean = presence.iter().map(|(_, p)| *p as f64).sum::<f64>() / presence.len() as f64;
+    let offsets: Vec<f64> = presence.iter().map(|(_, p)| (*p as f64 - mean).clamp(-drift as f64, drift as f64)).collect();
+    let shift = offsets.iter().sum::<f64>() / offsets.len() as f64;
+    let mut steps: Vec<i64> = offsets.iter().map(|o| ((o - shift) / 5.0).round() as i64 * 5).collect();
+    let longest = (0..presence.len()).max_by_key(|&i| presence[i].1).unwrap();
+    steps[longest] -= steps.iter().sum::<i64>();
+    presence.iter().zip(steps).map(|((day, _), step)| ((*day).clone(), target + step)).collect()
 }
 
 /// Sets a meeting entry to its calendar spans, one piece per meeting when there are several.
@@ -707,8 +743,10 @@ mod tests {
         }
     }
 
+    static NO_DRIFT: BTreeMap<String, i64> = BTreeMap::new();
+
     fn plan<'a>(target: i64, windows: &'a BTreeMap<String, Vec<(i64, i64)>>, meetings: &'a HashMap<String, Vec<(i64, i64)>>) -> FitPlan<'a> {
-        FitPlan { target, work_days: &[0, 1, 2, 3, 4], windows, meetings }
+        FitPlan { target, day_targets: &NO_DRIFT, work_days: &[0, 1, 2, 3, 4], windows, meetings }
     }
 
     #[test]
@@ -726,6 +764,23 @@ mod tests {
             "work running into the meeting resumes after it"
         );
         assert_eq!(entries[2].start_ts, at("13:15"));
+    }
+
+    #[test]
+    fn drifted_days_follow_presence_and_keep_the_total() {
+        let at = |day: &str, t: &str| entry(day, t, 0).start_ts;
+        let windows = BTreeMap::from([
+            ("2026-10-27".to_string(), vec![(at("2026-10-27", "09:00"), at("2026-10-27", "18:00"))]),
+            ("2026-10-28".to_string(), vec![(at("2026-10-28", "10:00"), at("2026-10-28", "15:00"))]),
+            ("2026-10-29".to_string(), vec![(at("2026-10-29", "09:00"), at("2026-10-29", "16:00"))]),
+            ("2026-10-31".to_string(), vec![(at("2026-10-31", "10:00"), at("2026-10-31", "11:00"))]),
+        ]);
+        let t = drifted_targets(&windows, 480, 30, &[0, 1, 2, 3, 4]);
+        assert_eq!(t.len(), 3, "Saturday is not a work day");
+        assert_eq!(t.values().sum::<i64>(), 3 * 480);
+        assert!(t["2026-10-27"] > 480 && t["2026-10-28"] < 480, "{t:?}");
+        assert!(t.values().all(|m| (m - 480).abs() <= 40 && m % 5 == 0), "{t:?}");
+        assert!(drifted_targets(&windows, 480, 0, &[0, 1, 2, 3, 4]).is_empty());
     }
 
     #[test]
