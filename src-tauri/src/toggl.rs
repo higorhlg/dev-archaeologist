@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::http::{self, KeychainItem};
-use crate::reports::{exportable, Report, ReportEntry};
+use crate::reports::{exportable, Piece, Report, ReportEntry};
 use crate::store::Store;
 
 const BASE: &str = "https://api.track.toggl.com/api/v9";
@@ -73,13 +73,13 @@ pub fn projects(token: &str, workspace_id: i64) -> Result<Vec<TogglProjectInfo>>
     Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
-fn create_entry(token: &str, workspace_id: i64, e: &ReportEntry, project_id: Option<i64>) -> Result<i64> {
-    let start = Utc.timestamp_millis_opt(e.start_ts).single().ok_or_else(|| anyhow!("bad start time"))?;
+fn create_entry(token: &str, workspace_id: i64, e: &ReportEntry, piece: Piece, project_id: Option<i64>) -> Result<i64> {
+    let start = Utc.timestamp_millis_opt(piece.start_ts).single().ok_or_else(|| anyhow!("bad start time"))?;
     let body = json!({
         "created_with": "Dev Archaeologist",
         "workspace_id": workspace_id,
         "start": start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        "duration": e.duration_min * 60,
+        "duration": piece.duration_min * 60,
         "description": e.description,
         "billable": e.billable,
         "tags": e.tags,
@@ -92,7 +92,15 @@ fn create_entry(token: &str, workspace_id: i64, e: &ReportEntry, project_id: Opt
     read(resp)?["id"].as_i64().ok_or_else(|| anyhow!("Toggl did not return an entry id"))
 }
 
-/// Sends approved entries that were never sent. A sent entry is recorded and never sent twice.
+/// Creates one Toggl entry per piece of `e`.
+/// @returns the first Toggl entry's id.
+fn create_pieces(token: &str, workspace_id: i64, e: &ReportEntry, project_id: Option<i64>) -> Result<i64> {
+    let ids = e.blocks().into_iter().map(|piece| create_entry(token, workspace_id, e, piece, project_id)).collect::<Result<Vec<_>>>()?;
+    ids.first().copied().ok_or_else(|| anyhow!("entry has no time"))
+}
+
+/// Sends approved entries that were never sent. An entry split around meetings becomes one Toggl
+/// entry per piece. A sent entry is recorded and never sent twice.
 /// Projects resolve by mapped id, else by a case-insensitive name match in the workspace.
 pub fn send(store: &Store, report: &Report, workspace_id: i64) -> Result<SendResult> {
     let token = token().ok_or_else(|| anyhow!("Add a Toggl API token in Sources first"))?;
@@ -107,7 +115,7 @@ pub fn send(store: &Store, report: &Report, workspace_id: i64) -> Result<SendRes
         }
         let mapped_id = e.project.as_ref().and_then(|p| settings.toggl.project_map.get(p)).and_then(|m| m.id);
         let project_id = mapped_id.or_else(|| by_name.get(&e.toggl_project.to_lowercase()).copied());
-        match create_entry(&token, workspace_id, e, project_id) {
+        match create_pieces(&token, workspace_id, e, project_id) {
             Ok(id) => {
                 store.record_toggl_sent(&e.key, id, e.duration_min, &e.description)?;
                 result.sent += 1;

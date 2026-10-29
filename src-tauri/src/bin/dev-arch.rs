@@ -113,11 +113,11 @@ fn print_report(p: &Pipeline, args: &[String]) -> Result<()> {
         t.0 += e.duration_min;
         t.1 += e.measured_min;
         let tickets = [&e.jira, &e.github].into_iter().flatten().map(|t| format!("{} ({})", t.key, t.source)).collect::<Vec<_>>().join(" ");
+        let times = e.blocks().iter().map(|b| format!("{}–{}", at(b.start_ts), at(b.start_ts + b.duration_min * 60_000))).collect::<Vec<_>>().join(",");
         println!(
-            "  {} {}–{} {:>4}m (measured {:>3}m)  {:<22} {:<28} {}",
+            "  {} {:<11} {:>4}m (measured {:>3}m)  {:<22} {:<28} {}",
             e.day,
-            at(e.start_ts),
-            at(e.start_ts + e.duration_min * 60_000),
+            times,
             e.duration_min,
             e.measured_min,
             e.toggl_project,

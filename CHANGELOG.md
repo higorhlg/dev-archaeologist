@@ -22,6 +22,9 @@ All notable changes to Dev Archaeologist. The format follows
   breaks up to 30 minutes). An entry that would start in a break waits for the next window
   while the windows left hold the rest of the day, so lunch and time away stay empty unless
   the day needs them.
+- Fitted days keep meetings at their calendar time and length, counted toward the day. Work
+  that runs into a meeting splits into pieces before and after it; the CSV writes one row per
+  piece and Toggl gets one entry per piece.
 - The daily automation rewrites a journal written before its day ended, such as one made
   mid-day for a time sheet. Confirmed journals stay.
 

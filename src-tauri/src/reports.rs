@@ -108,6 +108,27 @@ pub struct ReportEntry {
     pub gap_min: i64,
     /// Bridged minutes not in `duration_min` until the entry is approved.
     pub pending_bridge_min: i64,
+    /// The blocks the entry is split into when a fitted day lays it around meetings. Empty when
+    /// the entry runs in one block from `start_ts` for `duration_min`.
+    pub pieces: Vec<Piece>,
+}
+
+/// One block of an entry's time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Piece {
+    pub start_ts: i64,
+    pub duration_min: i64,
+}
+
+impl ReportEntry {
+    /// The entry's time as blocks: its `pieces`, or one block from `start_ts`.
+    pub fn blocks(&self) -> Vec<Piece> {
+        if self.pieces.is_empty() {
+            vec![Piece { start_ts: self.start_ts, duration_min: self.duration_min }]
+        } else {
+            self.pieces.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -374,6 +395,7 @@ fn build_entry(key: String, group: Vec<&Loaded>, cx: &EntryContext) -> ReportEnt
         measured_min: group.iter().map(|l| l.report_min + l.gap_min).sum(),
         gap_min: group.iter().map(|l| l.gap_min).sum(),
         pending_bridge_min: group.iter().map(|l| l.pending_min).sum(),
+        pieces: vec![],
         parallel_min: group.iter().map(|l| l.session.active_min - l.report_min).sum::<i64>().max(0),
         toggl_project: map.name,
         client: map.client,
@@ -409,7 +431,9 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
     entries.sort_by_key(|e| e.start_ts);
     if let Some(target) = q.fit_day_min.filter(|m| *m > 0) {
         let work_days = settings.schedule.as_ref().map_or_else(|| vec![0, 1, 2, 3, 4], |s| s.days.clone());
-        fit_days(&mut entries, target, &work_days, &presence_windows(&loaded));
+        let plan = FitPlan { target, work_days: &work_days, windows: &presence_windows(&loaded), meetings: &meeting_blocks(&loaded, q.grouping) };
+        fit_days(&mut entries, &plan);
+        entries.sort_by_key(|e| e.start_ts);
     }
 
     let mut by_project: BTreeMap<String, i64> = BTreeMap::new();
@@ -457,33 +481,73 @@ fn presence_windows(loaded: &[Loaded]) -> BTreeMap<String, Vec<(i64, i64)>> {
     spans
 }
 
-/// Scales each work day's entries in proportion so the day adds up to `target` minutes, in
-/// 5-minute steps when `target` allows, then lays them out without overlap inside the day's
-/// presence windows (see `lay_in_windows`). Entries mapped to "never send" keep their time and
-/// do not count. Entries already sent to Toggl keep their time and count toward the day. Days
-/// off the schedule's work days (Monday to Friday without a schedule) and days already at or
-/// past `target` once sent time is taken out keep their measured time.
-/// @param work_days 0 = Monday … 6 = Sunday.
-/// @param windows day → presence windows from `presence_windows`.
-fn fit_days(entries: &mut [ReportEntry], target: i64, work_days: &[u32], windows: &BTreeMap<String, Vec<(i64, i64)>>) {
+/// The calendar spans of work meetings, by the report entry that holds them.
+/// @returns entry key → sorted `(start_ms, end_ms)` meeting spans.
+fn meeting_blocks(loaded: &[Loaded], grouping: Grouping) -> HashMap<String, Vec<(i64, i64)>> {
+    let mut out: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
+    for l in loaded.iter().filter(|l| l.session.state != "excluded" && l.session.project.as_deref() == Some(crate::pipeline::WORK_MEETINGS)) {
+        out.entry(group_key(l, grouping)).or_default().push((l.session.start_ts, l.session.end_ts));
+    }
+    out.values_mut().for_each(|spans| spans.sort());
+    out
+}
+
+/// How `fit_days` fits a report.
+struct FitPlan<'a> {
+    /// Minutes each work day adds up to.
+    target: i64,
+    /// 0 = Monday … 6 = Sunday.
+    work_days: &'a [u32],
+    /// Day → presence windows from `presence_windows`.
+    windows: &'a BTreeMap<String, Vec<(i64, i64)>>,
+    /// Entry key → meeting spans from `meeting_blocks`.
+    meetings: &'a HashMap<String, Vec<(i64, i64)>>,
+}
+
+/// Fits each work day to `plan.target` minutes. Meeting entries take their calendar time and
+/// length and count toward the day. The other entries scale in proportion to fill the rest, in
+/// 5-minute steps when the rest allows, then are laid out without overlap inside the day's
+/// presence windows and around its meetings (see `lay_in_windows`). Entries mapped to "never
+/// send" keep their time and do not count. Entries already sent to Toggl keep their time and
+/// count toward the day. Days off the work days (Monday to Friday without a schedule) and days
+/// already at or past the target once sent and meeting time is taken out keep their measured
+/// time.
+fn fit_days(entries: &mut [ReportEntry], plan: &FitPlan) {
     let mut days: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, e) in entries.iter().enumerate().filter(|(_, e)| !e.skip) {
         days.entry(e.day.clone()).or_default().push(i);
     }
     for (day, idx) in days {
         let weekday = NaiveDate::parse_from_str(&day, "%Y-%m-%d").map(|d| d.weekday().num_days_from_monday());
-        if !weekday.is_ok_and(|w| work_days.contains(&w)) {
+        if !weekday.is_ok_and(|w| plan.work_days.contains(&w)) {
             continue;
         }
         let sent: i64 = idx.iter().filter(|&&i| entries[i].sent).map(|&i| entries[i].duration_min).sum();
-        let open: Vec<usize> = idx.iter().copied().filter(|&i| !entries[i].sent).collect();
+        let meeting_of = |e: &ReportEntry| plan.meetings.get(&e.key).filter(|_| !e.sent);
+        let mut busy: Vec<(i64, i64)> = idx.iter().filter_map(|&i| meeting_of(&entries[i])).flatten().copied().collect();
+        busy.sort();
+        let open: Vec<usize> = idx.iter().copied().filter(|&i| !entries[i].sent && meeting_of(&entries[i]).is_none()).collect();
         let measured: Vec<i64> = open.iter().map(|&i| entries[i].duration_min).collect();
-        let Some(fitted) = scale_to(&measured, target - sent) else { continue };
+        let meeting_min: i64 = busy.iter().map(|(s, e)| (e - s) / 60_000).sum();
+        let Some(fitted) = scale_to(&measured, plan.target - sent - meeting_min) else { continue };
+        for &i in &idx {
+            if let Some(spans) = meeting_of(&entries[i]).cloned() {
+                pin_to_calendar(&mut entries[i], &spans);
+            }
+        }
         for (&i, min) in open.iter().zip(fitted) {
             entries[i].duration_min = min;
         }
-        lay_in_windows(entries, &open, windows.get(&day).map_or(&[][..], Vec::as_slice));
+        lay_in_windows(entries, &open, plan.windows.get(&day).map_or(&[][..], Vec::as_slice), &busy);
     }
+}
+
+/// Sets a meeting entry to its calendar spans, one piece per meeting when there are several.
+fn pin_to_calendar(e: &mut ReportEntry, spans: &[(i64, i64)]) {
+    let pieces: Vec<Piece> = spans.iter().map(|&(s, end)| Piece { start_ts: s, duration_min: (end - s) / 60_000 }).collect();
+    e.start_ts = pieces[0].start_ts;
+    e.duration_min = pieces.iter().map(|p| p.duration_min).sum();
+    e.pieces = if pieces.len() > 1 { pieces } else { vec![] };
 }
 
 /// `parts` scaled to sum to `total`, in 5-minute steps when `total` is a multiple of 5 (else
@@ -517,31 +581,58 @@ fn scale_to(parts: &[i64], total: i64) -> Option<Vec<i64>> {
 }
 
 /// Moves each of `idx` (in start order) to start no earlier than the previous one ends. An entry
-/// that would start in a break between `windows` waits for the next window while the windows
-/// left still hold every remaining minute, so breaks stay empty unless the day needs them.
-/// Without windows, entries run back to back.
-fn lay_in_windows(entries: &mut [ReportEntry], idx: &[usize], windows: &[(i64, i64)]) {
+/// that would start in a break between `windows` waits for the next window while the free
+/// window time left still holds every remaining minute, so breaks stay empty unless the day
+/// needs them. Entries never overlap `busy` spans: one that runs into a meeting splits into
+/// pieces before and after it. Without windows, entries run back to back.
+/// @param busy sorted meeting spans the entries flow around.
+fn lay_in_windows(entries: &mut [ReportEntry], idx: &[usize], windows: &[(i64, i64)], busy: &[(i64, i64)]) {
     let mut order = idx.to_vec();
     order.sort_by_key(|&i| entries[i].start_ts);
     let mut remaining_ms: i64 = order.iter().map(|&i| entries[i].duration_min * 60_000).sum();
     let mut cursor = i64::MIN;
     for i in order {
-        let mut start = entries[i].start_ts.max(cursor);
+        let mut start = after_busy(busy, entries[i].start_ts.max(cursor));
         let in_window = windows.iter().any(|&(s, e)| s <= start && start < e);
         if let Some(&(next, _)) = windows.iter().find(|&&(s, _)| s > start).filter(|_| !in_window) {
-            if window_ms_from(windows, next) >= remaining_ms {
-                start = next;
+            if free_ms_from(windows, busy, next) >= remaining_ms {
+                start = after_busy(busy, next);
             }
         }
+        let pieces = split_around(busy, start, entries[i].duration_min);
+        let last = pieces.last().copied().unwrap_or(Piece { start_ts: start, duration_min: 0 });
+        cursor = last.start_ts + last.duration_min * 60_000;
         entries[i].start_ts = start;
-        cursor = start + entries[i].duration_min * 60_000;
+        entries[i].pieces = if pieces.len() > 1 { pieces } else { vec![] };
         remaining_ms -= entries[i].duration_min * 60_000;
     }
 }
 
-/// Window time at or after `at`.
-fn window_ms_from(windows: &[(i64, i64)], at: i64) -> i64 {
-    windows.iter().map(|&(s, e)| (e - s.max(at)).max(0)).sum()
+/// `at`, or the end of the `busy` spans it falls inside.
+fn after_busy(busy: &[(i64, i64)], at: i64) -> i64 {
+    busy.iter().fold(at, |t, &(s, e)| if s <= t && t < e { e } else { t })
+}
+
+/// `minutes` from `start` as pieces that skip every `busy` span. The pieces add up to `minutes`.
+fn split_around(busy: &[(i64, i64)], start: i64, minutes: i64) -> Vec<Piece> {
+    let mut pieces = Vec::new();
+    let (mut at, mut left) = (start, minutes);
+    while left > 0 {
+        let gap_min = busy.iter().find(|&&(s, _)| s > at).map_or(left, |&(s, _)| ((s - at) / 60_000).min(left));
+        if gap_min > 0 {
+            pieces.push(Piece { start_ts: at, duration_min: gap_min });
+            left -= gap_min;
+        }
+        at = after_busy(busy, at + gap_min.max(1) * 60_000);
+    }
+    pieces
+}
+
+/// Window time at or after `at` that no `busy` span takes.
+fn free_ms_from(windows: &[(i64, i64)], busy: &[(i64, i64)], at: i64) -> i64 {
+    let window: i64 = windows.iter().map(|&(s, e)| (e - s.max(at)).max(0)).sum();
+    let taken: i64 = busy.iter().map(|&(s, e)| (e - s.max(at)).max(0)).sum();
+    (window - taken).max(0)
 }
 
 /// Sessions safe to approve in one step: high confidence, with a project, not hidden.
@@ -577,11 +668,12 @@ pub fn exportable_unapproved(report: &Report) -> impl Iterator<Item = &ReportEnt
     report.entries.iter().filter(|e| !e.skip && e.context == Context::Work)
 }
 
-/// `entries` in Toggl's Detailed report columns, which its CSV importer reads back.
+/// `entries` in Toggl's Detailed report columns, which its CSV importer reads back. An entry
+/// split around meetings writes one row per piece.
 pub fn to_csv<'a>(entries: impl Iterator<Item = &'a ReportEntry>, email: &str) -> String {
     let mut out = String::from("Email,Client,Project,Task,Description,Billable,Start date,Start time,Duration,Tags\n");
-    for e in entries {
-        let start = local(e.start_ts);
+    for (e, piece) in entries.flat_map(|e| e.blocks().into_iter().map(move |p| (e, p))) {
+        let start = local(piece.start_ts);
         let row = [
             email.to_string(),
             e.client.clone(),
@@ -591,7 +683,7 @@ pub fn to_csv<'a>(entries: impl Iterator<Item = &'a ReportEntry>, email: &str) -
             if e.billable { "Yes".into() } else { "No".into() },
             start.format("%Y-%m-%d").to_string(),
             start.format("%H:%M:%S").to_string(),
-            format!("{:02}:{:02}:00", e.duration_min / 60, e.duration_min % 60),
+            format!("{:02}:{:02}:00", piece.duration_min / 60, piece.duration_min % 60),
             e.tags.join(", "),
         ];
         out.push_str(&row.iter().map(|f| csv_field(f)).collect::<Vec<_>>().join(","));
@@ -611,8 +703,29 @@ mod tests {
             toggl_project: String::new(), client: String::new(), billable: false, skip: false, context: Context::Work,
             label: String::new(), description: String::new(), tags: vec![], jira: None, jira_info: None, github: None,
             github_info: None, suggestion: None, session_ids: vec![], approved: false, reasons: vec![], sent: false,
-            parallel_min: 0, gap_min: 0, pending_bridge_min: 0,
+            parallel_min: 0, gap_min: 0, pending_bridge_min: 0, pieces: vec![],
         }
+    }
+
+    fn plan<'a>(target: i64, windows: &'a BTreeMap<String, Vec<(i64, i64)>>, meetings: &'a HashMap<String, Vec<(i64, i64)>>) -> FitPlan<'a> {
+        FitPlan { target, work_days: &[0, 1, 2, 3, 4], windows, meetings }
+    }
+
+    #[test]
+    fn meetings_keep_their_calendar_time_and_entries_split_around_them() {
+        let at = |t: &str| entry("2026-10-28", t, 0).start_ts;
+        let windows = BTreeMap::from([("2026-10-28".to_string(), vec![(at("09:00"), at("17:00"))])]);
+        let mut entries = vec![entry("2026-10-28", "09:00", 120), entry("2026-10-28", "11:30", 20), entry("2026-10-28", "13:00", 120)];
+        let meetings = HashMap::from([(entries[1].key.clone(), vec![(at("11:30"), at("12:00"))])]);
+        fit_days(&mut entries, &plan(480, &windows, &meetings));
+        assert_eq!((entries[1].start_ts, entries[1].duration_min), (at("11:30"), 30), "the meeting keeps its slot and length");
+        assert_eq!(entries[0].duration_min + entries[2].duration_min, 450, "the rest fills the day");
+        assert_eq!(
+            entries[0].blocks(),
+            vec![Piece { start_ts: at("09:00"), duration_min: 150 }, Piece { start_ts: at("12:00"), duration_min: 75 }],
+            "work running into the meeting resumes after it"
+        );
+        assert_eq!(entries[2].start_ts, at("13:15"));
     }
 
     #[test]
@@ -634,7 +747,7 @@ mod tests {
             entry("2026-10-20", "11:00", 60),
         ];
         entries[3].sent = true;
-        fit_days(&mut entries, 480, &[0, 1, 2, 3, 4], &BTreeMap::new());
+        fit_days(&mut entries, &plan(480, &BTreeMap::new(), &HashMap::new()));
         assert_eq!((entries[0].duration_min, entries[1].duration_min), (320, 160));
         assert_eq!(entries[1].start_ts, entries[0].start_ts + 320 * 60_000, "laid back to back");
         assert_eq!(entries[2].duration_min, 25, "Saturday keeps its measured time");
@@ -651,13 +764,13 @@ mod tests {
         )]);
         let day = || vec![entry("2026-10-27", "09:00", 90), entry("2026-10-27", "10:30", 30), entry("2026-10-27", "13:30", 120)];
         let mut roomy = day();
-        fit_days(&mut roomy, 480, &[0, 1, 2, 3, 4], &windows);
+        fit_days(&mut roomy, &plan(480, &windows, &HashMap::new()));
         assert_eq!(roomy.iter().map(|e| e.duration_min).collect::<Vec<_>>(), vec![180, 60, 240]);
         assert_eq!(roomy[1].start_ts, at("13:00"), "waits out lunch while the afternoon holds the rest");
         assert_eq!(roomy[2].start_ts, at("14:00"));
 
         let mut short = day();
-        fit_days(&mut short, 540, &[0, 1, 2, 3, 4], &windows);
+        fit_days(&mut short, &plan(540, &windows, &HashMap::new()));
         assert_eq!(short[1].start_ts, short[0].start_ts + short[0].duration_min * 60_000, "a day longer than its windows fills the break");
     }
 

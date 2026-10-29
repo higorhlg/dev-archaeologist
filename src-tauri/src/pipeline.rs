@@ -118,10 +118,13 @@ impl Pipeline {
     }
 }
 
+/// The project every work meeting belongs to.
+pub const WORK_MEETINGS: &str = "Meetings";
+
 /// Work meetings share one project; meetings from other accounts sit apart.
 fn meeting_project(settings: &Settings, path: Option<&str>) -> String {
     let account = path.and_then(|p| p.strip_prefix(crate::adapters::calendar::PATH_PREFIX)).unwrap_or_default();
-    if settings.contexts.is_work_account(account) { "Meetings".into() } else { "Personal events".into() }
+    if settings.contexts.is_work_account(account) { WORK_MEETINGS.into() } else { "Personal events".into() }
 }
 
 fn is_agent(e: &WorkEvent) -> bool {
