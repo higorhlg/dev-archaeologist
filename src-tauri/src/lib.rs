@@ -4,6 +4,7 @@
 pub mod achievements;
 pub mod adapters;
 pub mod api;
+pub mod away;
 pub mod backfill;
 pub mod collectors;
 pub mod contexts;

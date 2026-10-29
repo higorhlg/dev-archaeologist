@@ -14,6 +14,8 @@ All notable changes to Dev Archaeologist. The format follows
 - `dev-arch report --fit HOURS --drift MIN` lets each fitted day move up to about MIN minutes
   from HOURS, toward how long that day's presence ran against the other days, in 5-minute
   steps. The days together still add up to HOURS each. `ReportQuery.fit_drift_min` carries it.
+- `dev-arch away DAY [HH:MM HH:MM | clear]` records time away from work. Fitted days leave it
+  empty and do not count it as presence; work that runs into it continues after it.
 - `dev-arch sync` warns when the calendar source is on but the binary has no Calendar access,
   so meetings are not read.
 - `dev-arch calendar [connect | reimport]` shows Calendar access, asks macOS for it, and reads
@@ -27,7 +29,8 @@ All notable changes to Dev Archaeologist. The format follows
   the day needs them.
 - Fitted days keep meetings at their calendar time and length, counted toward the day. Work
   that runs into a meeting splits into pieces before and after it; the CSV writes one row per
-  piece and Toggl gets one entry per piece.
+  piece and Toggl gets one entry per piece. A piece shorter than 10 minutes moves the whole
+  entry past the meeting or away time instead.
 - The daily automation rewrites a journal written before its day ended, such as one made
   mid-day for a time sheet. Confirmed journals stay.
 

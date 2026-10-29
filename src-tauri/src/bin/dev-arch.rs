@@ -13,6 +13,7 @@
 //!   dev-arch gaps [YYYY-MM-DD]   print the day's gaps inside work hours
 //!   dev-arch fill DAY PROJECT     assign a day's unaccounted blocks to one project
 //!   dev-arch approve-bridges DAY approve a day's bridged gaps
+//!   dev-arch away DAY [HH:MM HH:MM | clear]  record time away; fitted days leave it empty
 //!   dev-arch calendar [connect|reimport]  Calendar access; ask for it; read 90 days of meetings again
 //!   dev-arch sync [--tickets]    read every source since the last poll, sync tickets when due
 //!                                (or now with --tickets), run the daily automation
@@ -231,6 +232,17 @@ fn main() -> Result<()> {
             let day = arg_day(&args);
             println!("approved {} bridges", api::approve_bridges(&p, &day, &day)?);
         }
+        Some("away") => {
+            let day = arg_day(&args);
+            match (args.get(3).map(String::as_str), args.get(4)) {
+                (Some("clear"), _) => devarch::away::clear(&p.store, &day)?,
+                (Some(start), Some(end)) => devarch::away::add(&p.store, &day, start, end)?,
+                (None, _) => {}
+                _ => bail!("usage: dev-arch away DAY [HH:MM HH:MM | clear]"),
+            }
+            let spans = devarch::away::load(&p.store)?.remove(&day).unwrap_or_default();
+            println!("{day} away: {}", if spans.is_empty() { "-".into() } else { spans.iter().map(|(s, e)| format!("{s}–{e}")).collect::<Vec<_>>().join(", ") });
+        }
         Some("calendar") => {
             let n = match args.get(2).map(String::as_str) {
                 Some("connect") => api::connect_calendar(&p).map(|_| None)?,
@@ -300,7 +312,7 @@ fn main() -> Result<()> {
             println!("API key saved to the Keychain");
         }
         Some("hook") => println!("Add this line to ~/.zshrc:\n  {}", api::install_shell_hook()?),
-        _ => bail!("usage: dev-arch discover|backfill|day|rebuild|journal|report|find-tickets|calendar|sync|sync-agent|weekly|status|daemon|set-key|hook"),
+        _ => bail!("usage: dev-arch discover|backfill|day|rebuild|journal|report|find-tickets|away|calendar|sync|sync-agent|weekly|status|daemon|set-key|hook"),
     }
     Ok(())
 }

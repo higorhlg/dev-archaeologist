@@ -436,9 +436,11 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
     entries.sort_by_key(|e| e.start_ts);
     if let Some(target) = q.fit_day_min.filter(|m| *m > 0) {
         let work_days = settings.schedule.as_ref().map_or_else(|| vec![0, 1, 2, 3, 4], |s| s.days.clone());
-        let windows = presence_windows(&loaded);
+        let away = crate::away::spans_ms(store, &q.from, &q.to)?;
+        let windows = without_away(presence_windows(&loaded), &away);
         let day_targets = drifted_targets(&windows, target, q.fit_drift_min.unwrap_or(0), &work_days);
-        let plan = FitPlan { target, day_targets: &day_targets, work_days: &work_days, windows: &windows, meetings: &meeting_blocks(&loaded, q.grouping) };
+        let meetings = meeting_blocks(&loaded, q.grouping);
+        let plan = FitPlan { target, day_targets: &day_targets, work_days: &work_days, windows: &windows, meetings: &meetings, away: &away };
         fit_days(&mut entries, &plan);
         entries.sort_by_key(|e| e.start_ts);
     }
@@ -488,6 +490,18 @@ fn presence_windows(loaded: &[Loaded]) -> BTreeMap<String, Vec<(i64, i64)>> {
     spans
 }
 
+/// `windows` with the away spans cut out of them.
+fn without_away(mut windows: BTreeMap<String, Vec<(i64, i64)>>, away: &BTreeMap<String, Vec<(i64, i64)>>) -> BTreeMap<String, Vec<(i64, i64)>> {
+    for (day, spans) in away {
+        if let Some(w) = windows.get_mut(day) {
+            for &(a, b) in spans {
+                *w = w.iter().flat_map(|&(s, e)| [(s, e.min(a)), (s.max(b), e)]).filter(|(s, e)| s < e).collect();
+            }
+        }
+    }
+    windows
+}
+
 /// The calendar spans of work meetings, by the report entry that holds them.
 /// @returns entry key → sorted `(start_ms, end_ms)` meeting spans.
 fn meeting_blocks(loaded: &[Loaded], grouping: Grouping) -> HashMap<String, Vec<(i64, i64)>> {
@@ -511,12 +525,14 @@ struct FitPlan<'a> {
     windows: &'a BTreeMap<String, Vec<(i64, i64)>>,
     /// Entry key → meeting spans from `meeting_blocks`.
     meetings: &'a HashMap<String, Vec<(i64, i64)>>,
+    /// Day → spans the user was away, from `away::spans_ms`. No entry is laid inside them.
+    away: &'a BTreeMap<String, Vec<(i64, i64)>>,
 }
 
 /// Fits each work day to its `plan.day_targets` minutes, else `plan.target`. Meeting entries take their calendar time and
 /// length and count toward the day. The other entries scale in proportion to fill the rest, in
 /// 5-minute steps when the rest allows, then are laid out without overlap inside the day's
-/// presence windows and around its meetings (see `lay_in_windows`). Entries mapped to "never
+/// presence windows and around its meetings and away time (see `lay_in_windows`). Entries mapped to "never
 /// send" keep their time and do not count. Entries already sent to Toggl keep their time and
 /// count toward the day. Days off the work days (Monday to Friday without a schedule) and days
 /// already at or past the target once sent and meeting time is taken out keep their measured
@@ -539,6 +555,8 @@ fn fit_days(entries: &mut [ReportEntry], plan: &FitPlan) {
         let measured: Vec<i64> = open.iter().map(|&i| entries[i].duration_min).collect();
         let meeting_min: i64 = busy.iter().map(|(s, e)| (e - s) / 60_000).sum();
         let Some(fitted) = scale_to(&measured, target - sent - meeting_min) else { continue };
+        busy.extend(plan.away.get(&day).into_iter().flatten().copied());
+        busy.sort();
         for &i in &idx {
             if let Some(spans) = meeting_of(&entries[i]).cloned() {
                 pin_to_calendar(&mut entries[i], &spans);
@@ -620,7 +638,8 @@ fn scale_to(parts: &[i64], total: i64) -> Option<Vec<i64>> {
 /// that would start in a break between `windows` waits for the next window while the free
 /// window time left still holds every remaining minute, so breaks stay empty unless the day
 /// needs them. Entries never overlap `busy` spans: one that runs into a meeting splits into
-/// pieces before and after it. Without windows, entries run back to back.
+/// pieces before and after it, unless a piece would be shorter than `MIN_PIECE_MIN`; then the
+/// whole entry starts after that span. Without windows, entries run back to back.
 /// @param busy sorted meeting spans the entries flow around.
 fn lay_in_windows(entries: &mut [ReportEntry], idx: &[usize], windows: &[(i64, i64)], busy: &[(i64, i64)]) {
     let mut order = idx.to_vec();
@@ -635,7 +654,11 @@ fn lay_in_windows(entries: &mut [ReportEntry], idx: &[usize], windows: &[(i64, i
                 start = after_busy(busy, next);
             }
         }
-        let pieces = split_around(busy, start, entries[i].duration_min);
+        let mut pieces = split_around(busy, start, entries[i].duration_min);
+        if pieces.len() > 1 && pieces.iter().any(|p| p.duration_min < MIN_PIECE_MIN) {
+            start = pieces[1].start_ts;
+            pieces = split_around(busy, start, entries[i].duration_min);
+        }
         let last = pieces.last().copied().unwrap_or(Piece { start_ts: start, duration_min: 0 });
         cursor = last.start_ts + last.duration_min * 60_000;
         entries[i].start_ts = start;
@@ -643,6 +666,9 @@ fn lay_in_windows(entries: &mut [ReportEntry], idx: &[usize], windows: &[(i64, i
         remaining_ms -= entries[i].duration_min * 60_000;
     }
 }
+
+/// A split piece shorter than this moves its entry past the span that split it.
+const MIN_PIECE_MIN: i64 = 10;
 
 /// `at`, or the end of the `busy` spans it falls inside.
 fn after_busy(busy: &[(i64, i64)], at: i64) -> i64 {
@@ -744,9 +770,10 @@ mod tests {
     }
 
     static NO_DRIFT: BTreeMap<String, i64> = BTreeMap::new();
+    static NO_AWAY: BTreeMap<String, Vec<(i64, i64)>> = BTreeMap::new();
 
     fn plan<'a>(target: i64, windows: &'a BTreeMap<String, Vec<(i64, i64)>>, meetings: &'a HashMap<String, Vec<(i64, i64)>>) -> FitPlan<'a> {
-        FitPlan { target, day_targets: &NO_DRIFT, work_days: &[0, 1, 2, 3, 4], windows, meetings }
+        FitPlan { target, day_targets: &NO_DRIFT, work_days: &[0, 1, 2, 3, 4], windows, meetings, away: &NO_AWAY }
     }
 
     #[test]
@@ -764,6 +791,24 @@ mod tests {
             "work running into the meeting resumes after it"
         );
         assert_eq!(entries[2].start_ts, at("13:15"));
+    }
+
+    #[test]
+    fn away_time_leaves_presence_and_holds_no_entry() {
+        let at = |t: &str| entry("2026-10-29", t, 0).start_ts;
+        let day = "2026-10-29".to_string();
+        let away = BTreeMap::from([(day.clone(), vec![(at("14:30"), at("17:30"))])]);
+        let windows = without_away(BTreeMap::from([(day.clone(), vec![(at("09:00"), at("19:00"))])]), &away);
+        assert_eq!(windows[&day], vec![(at("09:00"), at("14:30")), (at("17:30"), at("19:00"))]);
+        let mut entries = vec![entry("2026-10-29", "13:00", 120), entry("2026-10-29", "18:00", 60)];
+        let meetings = HashMap::new();
+        let plan = FitPlan { target: 180, day_targets: &NO_DRIFT, work_days: &[0, 1, 2, 3, 4], windows: &windows, meetings: &meetings, away: &away };
+        fit_days(&mut entries, &plan);
+        assert_eq!(
+            entries[0].blocks(),
+            vec![Piece { start_ts: at("13:00"), duration_min: 90 }, Piece { start_ts: at("17:30"), duration_min: 30 }]
+        );
+        assert_eq!(entries[1].start_ts, at("18:00"));
     }
 
     #[test]
