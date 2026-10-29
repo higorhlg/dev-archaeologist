@@ -158,8 +158,8 @@ fn build_session(day: &str, run: &[&WorkEvent]) -> Session {
 }
 
 /// A label taken straight from the evidence: a meeting title, an agent session title, the
-/// last commit subject, or the first prompt, in that order.
-fn observed_label(run: &[&WorkEvent]) -> Option<String> {
+/// last commit subject, or the first prompt, in that order. `run` is in time order.
+pub fn observed_label(run: &[&WorkEvent]) -> Option<String> {
     run.iter()
         .find(|e| e.kind == kind::MEETING)
         .or_else(|| run.iter().rev().find(|e| e.kind == kind::AI_TITLE))

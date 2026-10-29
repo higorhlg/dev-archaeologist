@@ -114,8 +114,8 @@ pub fn accept_lines(lines: Vec<JournalLine>, known: &HashSet<String>) -> Vec<Jou
     lines.into_iter().filter(|l| !l.cites.is_empty() && l.cites.iter().all(|c| known.contains(c))).collect()
 }
 
-/// Writes the journal for one day with one API call, and labels the day's sessions.
-/// Sessions the user edited or confirmed keep their own labels.
+/// Writes the journal for one day with one API call, and labels the day's sessions
+/// (see `apply_session_labels`).
 pub fn generate(store: &Store, day: &str) -> Result<Journal> {
     let settings = Settings::load(store)?;
     let key = api_key().ok_or_else(|| anyhow!("no Claude API key: add one in Settings"))?;
@@ -136,20 +136,37 @@ pub fn generate(store: &Store, day: &str) -> Result<Journal> {
     Ok(journal)
 }
 
+/// Labels the day's sessions with the model's labels. Edited and excluded sessions keep theirs,
+/// and meetings keep their calendar title.
+/// A confirmed session takes the AI label only while its label is still the one its evidence
+/// gives, and stays confirmed: confirming approves the time, not the words.
 fn apply_session_labels(store: &Store, day: &str, labels: &[SessionOut]) -> Result<()> {
     let by_id: HashMap<&str, &SessionOut> = labels.iter().map(|s| (s.id.as_str(), s)).collect();
     for mut s in store.sessions_for_day(day)? {
-        if s.is_user_touched() {
+        let Some(l) = by_id.get(s.id.as_str()) else { continue };
+        if s.project.as_deref() == Some(crate::pipeline::WORK_MEETINGS) {
             continue;
         }
-        if let Some(l) = by_id.get(s.id.as_str()) {
-            s.label = Some(l.label.clone());
-            s.summary = Some(l.summary.clone());
-            s.state = "inferred".into();
-            store.update_session(&s)?;
+        let confirmed = s.state == "confirmed";
+        if s.is_user_touched() && !(confirmed && has_evidence_label(store, &s)?) {
+            continue;
         }
+        s.label = Some(l.label.clone());
+        s.summary = Some(l.summary.clone());
+        if !confirmed {
+            s.state = "inferred".into();
+        }
+        store.update_session(&s)?;
     }
     Ok(())
+}
+
+/// The session's label is the one its own evidence gives, so no person wrote it.
+fn has_evidence_label(store: &Store, s: &crate::sessions::Session) -> Result<bool> {
+    let mut events = store.events_by_ids(&store.session_event_ids(&s.id)?)?;
+    events.sort_by_key(|e| e.ts);
+    let run: Vec<&crate::event::WorkEvent> = events.iter().collect();
+    Ok(s.label.is_some() && crate::sessions::cluster::observed_label(&run) == s.label)
 }
 
 fn rename_achievements(store: &Store, day: &str, names: &[AchievementOut]) -> Result<()> {

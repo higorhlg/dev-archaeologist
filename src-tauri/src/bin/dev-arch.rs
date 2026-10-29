@@ -5,9 +5,9 @@
 //!   dev-arch day [YYYY-MM-DD]    print one day's sessions and achievements
 //!   dev-arch journal YYYY-MM-DD  write the day's journal with the Claude API
 //!   dev-arch report FROM TO [session|ticket_day|project_day] [work|personal|all]
-//!                [--fit HOURS [--drift MIN]] [--csv [PATH]] [--include-unapproved]
+//!                [--fit HOURS [--drift MIN]] [--csv [PATH]] [--html [PATH]] [--include-unapproved]
 //!                fit work days to HOURS inside their presence windows, each day moving up to
-//!                about MIN minutes toward its presence; write the Toggl CSV
+//!                about MIN minutes toward its presence; write the Toggl CSV and a readable HTML page
 //!   dev-arch find-tickets FROM TO [work|personal|all]  suggest tickets from Jira and GitHub
 //!   dev-arch schedule [HH:MM HH:MM | off]  set Mon–Fri hours with lunch 12–13
 //!   dev-arch gaps [YYYY-MM-DD]   print the day's gaps inside work hours
@@ -81,7 +81,7 @@ fn positional(args: &[String]) -> Vec<String> {
             "--fit" | "--drift" => {
                 it.next();
             }
-            "--csv" => {
+            "--csv" | "--html" => {
                 it.next_if(|v| !v.starts_with("--"));
             }
             "--include-unapproved" => {}
@@ -91,7 +91,7 @@ fn positional(args: &[String]) -> Vec<String> {
     out
 }
 
-/// `report FROM TO [grouping] [context] [--fit HOURS [--drift MIN]] [--csv [PATH]] [--include-unapproved]`.
+/// `report FROM TO [grouping] [context] [--fit HOURS [--drift MIN]] [--csv [PATH]] [--html [PATH]] [--include-unapproved]`.
 /// Prints each entry with its laid-out times; with `--csv`, writes the Toggl CSV of approved
 /// work entries (all work entries with `--include-unapproved`) to PATH or ~/Downloads.
 fn print_report(p: &Pipeline, args: &[String]) -> Result<()> {
@@ -134,6 +134,32 @@ fn print_report(p: &Pipeline, args: &[String]) -> Result<()> {
     if args.iter().any(|a| a == "--csv") {
         write_report_csv(p, &r, args)?;
     }
+    if args.iter().any(|a| a == "--html") {
+        write_report_html(p, &r, args)?;
+    }
+    Ok(())
+}
+
+/// The path after `flag`, else `name` in ~/Downloads.
+fn output_path(args: &[String], flag: &str, name: String) -> Result<std::path::PathBuf> {
+    Ok(match flag_value(args, flag).filter(|v| !v.starts_with("--")) {
+        Some(path) => std::path::PathBuf::from(path),
+        None => dirs::download_dir().or_else(dirs::home_dir).ok_or_else(|| anyhow::anyhow!("no Downloads folder"))?.join(name),
+    })
+}
+
+/// Writes the report as a readable HTML page, with the same entries `--csv` would write.
+fn write_report_html(p: &Pipeline, r: &devarch::reports::Report, args: &[String]) -> Result<()> {
+    let entries: Vec<&devarch::reports::ReportEntry> = if args.iter().any(|a| a == "--include-unapproved") {
+        devarch::reports::exportable_unapproved(r).collect()
+    } else {
+        devarch::reports::exportable(r).collect()
+    };
+    let away = devarch::away::spans_ms(&p.store, &r.query.from, &r.query.to)?;
+    let week_min = r.query.fit_day_min.unwrap_or(8 * 60) * 5;
+    let path = output_path(args, "--html", format!("timesheet-{}-to-{}.html", r.query.from, r.query.to))?;
+    std::fs::write(&path, devarch::timesheet_html::render(r, &entries, &away, week_min))?;
+    println!("wrote {}", path.display());
     Ok(())
 }
 
@@ -145,13 +171,7 @@ fn write_report_csv(p: &Pipeline, r: &devarch::reports::Report, args: &[String])
     } else {
         devarch::reports::to_csv(devarch::reports::exportable(r), &email)
     };
-    let path = match flag_value(args, "--csv").filter(|v| !v.starts_with("--")) {
-        Some(path) => std::path::PathBuf::from(path),
-        None => dirs::download_dir()
-            .or_else(dirs::home_dir)
-            .ok_or_else(|| anyhow::anyhow!("no Downloads folder"))?
-            .join(format!("toggl-{}-to-{}.csv", r.query.from, r.query.to)),
-    };
+    let path = output_path(args, "--csv", format!("toggl-{}-to-{}.csv", r.query.from, r.query.to))?;
     std::fs::write(&path, csv)?;
     println!("wrote {}", path.display());
     if !unapproved && r.review_count > 0 {

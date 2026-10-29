@@ -22,6 +22,7 @@ pub mod settings;
 pub mod store;
 pub mod sync;
 pub mod tickets;
+pub mod timesheet_html;
 pub mod toggl;
 pub mod trackers;
 pub mod weekly;

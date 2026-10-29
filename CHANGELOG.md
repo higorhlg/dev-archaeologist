@@ -14,6 +14,10 @@ All notable changes to Dev Archaeologist. The format follows
 - `dev-arch report --fit HOURS --drift MIN` lets each fitted day move up to about MIN minutes
   from HOURS, toward how long that day's presence ran against the other days, in 5-minute
   steps. The days together still add up to HOURS each. `ReportQuery.fit_drift_min` carries it.
+- `dev-arch report --html [PATH]` writes the report as a readable page laid out like a time
+  tracker's list view: a week total with a bar per day, time per project, and per day a
+  timeline (time away hatched) above one row per entry piece with its project, tickets, time
+  range and duration.
 - `dev-arch away DAY [HH:MM HH:MM | clear]` records time away from work. Fitted days leave it
   empty and do not count it as presence; work that runs into it continues after it.
 - `dev-arch sync` warns when the calendar source is on but the binary has no Calendar access,
@@ -33,6 +37,10 @@ All notable changes to Dev Archaeologist. The format follows
   entry past the meeting or away time instead.
 - The daily automation rewrites a journal written before its day ended, such as one made
   mid-day for a time sheet. Confirmed journals stay.
+
+- A journal labels confirmed sessions whose label is still the one their evidence gives, and
+  they stay confirmed. Edited sessions keep their labels, and meetings keep their calendar
+  title.
 
 ### Fixed
 - A journal whose answer labels fewer than half the day's sessions is asked for again once,
