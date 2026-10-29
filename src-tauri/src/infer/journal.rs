@@ -89,6 +89,26 @@ fn call_model(model: &str, key: &str, digest: &SessionDigest) -> Result<ModelOut
     })
 }
 
+/// Calls the model, and once more when the answer labels fewer than half the digest's sessions:
+/// a short answer would otherwise stand as the day's journal and leave raw prompts as labels.
+fn call_model_labelling_most_sessions(model: &str, key: &str, digest: &SessionDigest) -> Result<ModelOutput> {
+    let first = call_model(model, key, digest)?;
+    if labels_most_sessions(&first, digest) {
+        return Ok(first);
+    }
+    let second = call_model(model, key, digest)?;
+    if labels_most_sessions(&second, digest) {
+        return Ok(second);
+    }
+    bail!("the model labelled {} of {} sessions twice", second.sessions.len(), digest.sessions.len())
+}
+
+fn labels_most_sessions(out: &ModelOutput, digest: &SessionDigest) -> bool {
+    let ids: HashSet<&str> = digest.sessions.iter().map(|s| s.id.as_str()).collect();
+    let labelled = out.sessions.iter().filter(|s| ids.contains(s.id.as_str())).count();
+    labelled * 2 >= ids.len()
+}
+
 /// Keeps only journal lines whose citations all exist in the digest.
 pub fn accept_lines(lines: Vec<JournalLine>, known: &HashSet<String>) -> Vec<JournalLine> {
     lines.into_iter().filter(|l| !l.cites.is_empty() && l.cites.iter().all(|c| known.contains(c))).collect()
@@ -103,7 +123,7 @@ pub fn generate(store: &Store, day: &str) -> Result<Journal> {
     if digest.sessions.is_empty() {
         bail!("no sessions on {day}");
     }
-    let out = call_model(&settings.model, &key, &digest)?;
+    let out = call_model_labelling_most_sessions(&settings.model, &key, &digest)?;
     apply_session_labels(store, day, &out.sessions)?;
     rename_achievements(store, day, &out.achievements)?;
     let journal = Journal {

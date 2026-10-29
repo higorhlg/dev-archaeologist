@@ -409,7 +409,7 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
     entries.sort_by_key(|e| e.start_ts);
     if let Some(target) = q.fit_day_min.filter(|m| *m > 0) {
         let work_days = settings.schedule.as_ref().map_or_else(|| vec![0, 1, 2, 3, 4], |s| s.days.clone());
-        fit_days(&mut entries, target, &work_days);
+        fit_days(&mut entries, target, &work_days, &presence_windows(&loaded));
     }
 
     let mut by_project: BTreeMap<String, i64> = BTreeMap::new();
@@ -432,14 +432,40 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
     })
 }
 
+/// Breaks between sessions up to this long count as presence; longer ones are time away.
+const PRESENCE_BRIDGE_MS: i64 = 30 * 60_000;
+
+/// Each day's spans of presence: the union of its session spans, joining breaks of at most
+/// `PRESENCE_BRIDGE_MS`. Excluded sessions do not count.
+/// @returns day → sorted, non-overlapping `(start_ms, end_ms)` windows.
+fn presence_windows(loaded: &[Loaded]) -> BTreeMap<String, Vec<(i64, i64)>> {
+    let mut spans: BTreeMap<String, Vec<(i64, i64)>> = BTreeMap::new();
+    for l in loaded.iter().filter(|l| l.session.state != "excluded") {
+        spans.entry(l.session.day.clone()).or_default().push((l.session.start_ts, l.session.end_ts));
+    }
+    for day_spans in spans.values_mut() {
+        day_spans.sort();
+        let mut joined: Vec<(i64, i64)> = Vec::new();
+        for &(start, end) in day_spans.iter() {
+            match joined.last_mut() {
+                Some(last) if start - last.1 <= PRESENCE_BRIDGE_MS => last.1 = last.1.max(end),
+                _ => joined.push((start, end)),
+            }
+        }
+        *day_spans = joined;
+    }
+    spans
+}
+
 /// Scales each work day's entries in proportion so the day adds up to `target` minutes, in
-/// 5-minute steps when `target` allows, then lays them back to back from the day's first start
-/// so no two overlap. Entries mapped to "never send" keep their time and do not count. Entries
-/// already sent to Toggl keep their time and count toward the day. Days off the schedule's work
-/// days (Monday to Friday without a schedule) and days already at or past `target` once sent
-/// time is taken out keep their measured time.
+/// 5-minute steps when `target` allows, then lays them out without overlap inside the day's
+/// presence windows (see `lay_in_windows`). Entries mapped to "never send" keep their time and
+/// do not count. Entries already sent to Toggl keep their time and count toward the day. Days
+/// off the schedule's work days (Monday to Friday without a schedule) and days already at or
+/// past `target` once sent time is taken out keep their measured time.
 /// @param work_days 0 = Monday … 6 = Sunday.
-fn fit_days(entries: &mut [ReportEntry], target: i64, work_days: &[u32]) {
+/// @param windows day → presence windows from `presence_windows`.
+fn fit_days(entries: &mut [ReportEntry], target: i64, work_days: &[u32], windows: &BTreeMap<String, Vec<(i64, i64)>>) {
     let mut days: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, e) in entries.iter().enumerate().filter(|(_, e)| !e.skip) {
         days.entry(e.day.clone()).or_default().push(i);
@@ -456,7 +482,7 @@ fn fit_days(entries: &mut [ReportEntry], target: i64, work_days: &[u32]) {
         for (&i, min) in open.iter().zip(fitted) {
             entries[i].duration_min = min;
         }
-        lay_back_to_back(entries, &open);
+        lay_in_windows(entries, &open, windows.get(&day).map_or(&[][..], Vec::as_slice));
     }
 }
 
@@ -490,15 +516,32 @@ fn scale_to(parts: &[i64], total: i64) -> Option<Vec<i64>> {
     Some(out.into_iter().map(|s| s * unit).collect())
 }
 
-/// Moves each of `idx` (in start order) to start no earlier than the previous one ends.
-fn lay_back_to_back(entries: &mut [ReportEntry], idx: &[usize]) {
+/// Moves each of `idx` (in start order) to start no earlier than the previous one ends. An entry
+/// that would start in a break between `windows` waits for the next window while the windows
+/// left still hold every remaining minute, so breaks stay empty unless the day needs them.
+/// Without windows, entries run back to back.
+fn lay_in_windows(entries: &mut [ReportEntry], idx: &[usize], windows: &[(i64, i64)]) {
     let mut order = idx.to_vec();
     order.sort_by_key(|&i| entries[i].start_ts);
+    let mut remaining_ms: i64 = order.iter().map(|&i| entries[i].duration_min * 60_000).sum();
     let mut cursor = i64::MIN;
     for i in order {
-        entries[i].start_ts = entries[i].start_ts.max(cursor);
-        cursor = entries[i].start_ts + entries[i].duration_min * 60_000;
+        let mut start = entries[i].start_ts.max(cursor);
+        let in_window = windows.iter().any(|&(s, e)| s <= start && start < e);
+        if let Some(&(next, _)) = windows.iter().find(|&&(s, _)| s > start).filter(|_| !in_window) {
+            if window_ms_from(windows, next) >= remaining_ms {
+                start = next;
+            }
+        }
+        entries[i].start_ts = start;
+        cursor = start + entries[i].duration_min * 60_000;
+        remaining_ms -= entries[i].duration_min * 60_000;
     }
+}
+
+/// Window time at or after `at`.
+fn window_ms_from(windows: &[(i64, i64)], at: i64) -> i64 {
+    windows.iter().map(|&(s, e)| (e - s.max(at)).max(0)).sum()
 }
 
 /// Sessions safe to approve in one step: high confidence, with a project, not hidden.
@@ -529,10 +572,15 @@ fn csv_field(s: &str) -> String {
     }
 }
 
-/// Toggl's Detailed report columns, which its CSV importer reads back.
-pub fn to_csv(report: &Report, email: &str) -> String {
+/// Work entries that would leave the app once approved: like `exportable`, without the approval.
+pub fn exportable_unapproved(report: &Report) -> impl Iterator<Item = &ReportEntry> {
+    report.entries.iter().filter(|e| !e.skip && e.context == Context::Work)
+}
+
+/// `entries` in Toggl's Detailed report columns, which its CSV importer reads back.
+pub fn to_csv<'a>(entries: impl Iterator<Item = &'a ReportEntry>, email: &str) -> String {
     let mut out = String::from("Email,Client,Project,Task,Description,Billable,Start date,Start time,Duration,Tags\n");
-    for e in exportable(report) {
+    for e in entries {
         let start = local(e.start_ts);
         let row = [
             email.to_string(),
@@ -586,12 +634,31 @@ mod tests {
             entry("2026-10-20", "11:00", 60),
         ];
         entries[3].sent = true;
-        fit_days(&mut entries, 480, &[0, 1, 2, 3, 4]);
+        fit_days(&mut entries, 480, &[0, 1, 2, 3, 4], &BTreeMap::new());
         assert_eq!((entries[0].duration_min, entries[1].duration_min), (320, 160));
         assert_eq!(entries[1].start_ts, entries[0].start_ts + 320 * 60_000, "laid back to back");
         assert_eq!(entries[2].duration_min, 25, "Saturday keeps its measured time");
         assert_eq!((entries[3].duration_min, entries[4].duration_min), (60, 420), "sent time counts and stays");
         assert_eq!(entries[0].measured_min, 120);
+    }
+
+    #[test]
+    fn fitted_entries_skip_breaks_the_windows_can_absorb_and_fill_them_otherwise() {
+        let at = |t: &str| entry("2026-10-27", t, 0).start_ts;
+        let windows = BTreeMap::from([(
+            "2026-10-27".to_string(),
+            vec![(at("09:00"), at("12:00")), (at("13:00"), at("18:00"))],
+        )]);
+        let day = || vec![entry("2026-10-27", "09:00", 90), entry("2026-10-27", "10:30", 30), entry("2026-10-27", "13:30", 120)];
+        let mut roomy = day();
+        fit_days(&mut roomy, 480, &[0, 1, 2, 3, 4], &windows);
+        assert_eq!(roomy.iter().map(|e| e.duration_min).collect::<Vec<_>>(), vec![180, 60, 240]);
+        assert_eq!(roomy[1].start_ts, at("13:00"), "waits out lunch while the afternoon holds the rest");
+        assert_eq!(roomy[2].start_ts, at("14:00"));
+
+        let mut short = day();
+        fit_days(&mut short, 540, &[0, 1, 2, 3, 4], &windows);
+        assert_eq!(short[1].start_ts, short[0].start_ts + short[0].duration_min * 60_000, "a day longer than its windows fills the break");
     }
 
     fn choices(auto: bool) -> TicketChoices {

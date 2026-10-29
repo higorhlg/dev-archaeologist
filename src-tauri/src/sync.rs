@@ -209,11 +209,13 @@ pub fn run_daily(p: &crate::pipeline::Pipeline) -> Result<Option<DailyRun>> {
     Ok(Some(run))
 }
 
-/// Journals for the finished days of the past week that have sessions and no journal yet.
+/// Journals for the finished days of the past week that have sessions and no journal written
+/// after the day ended. A journal written during its own day is rewritten; a confirmed one stays.
 fn write_missing_journals(p: &crate::pipeline::Pipeline, today: chrono::NaiveDate, run: &mut DailyRun) -> Result<()> {
     for back in (1..=JOURNAL_DAYS).rev() {
-        let day = (today - Duration::days(back)).format("%Y-%m-%d").to_string();
-        if p.store.journal(&day)?.is_some() || p.store.sessions_for_day(&day)?.is_empty() {
+        let date = today - Duration::days(back);
+        let day = date.format("%Y-%m-%d").to_string();
+        if has_final_journal(&p.store, date, &day)? || p.store.sessions_for_day(&day)?.is_empty() {
             continue;
         }
         match crate::infer::journal::generate(&p.store, &day) {
@@ -222,4 +224,13 @@ fn write_missing_journals(p: &crate::pipeline::Pipeline, today: chrono::NaiveDat
         }
     }
     Ok(())
+}
+
+/// The day has a confirmed journal, or one written after the day ended.
+fn has_final_journal(store: &Store, date: chrono::NaiveDate, day: &str) -> Result<bool> {
+    if store.journal(day)?.is_some_and(|j| j.state == "confirmed") {
+        return Ok(true);
+    }
+    let day_end = crate::pipeline::day_bounds(date).1.timestamp_millis();
+    Ok(store.journal_written_ms(day)?.is_some_and(|at| at >= day_end))
 }

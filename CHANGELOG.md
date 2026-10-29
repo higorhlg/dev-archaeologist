@@ -5,6 +5,30 @@ All notable changes to Dev Archaeologist. The format follows
 [Semantic Versioning](https://semver.org/). The version lives in `package.json`,
 `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, kept equal.
 
+## [Unreleased]
+
+### Added
+- `dev-arch report` takes `--fit HOURS` and `--csv [PATH]` (with `--include-unapproved` to
+  write entries still waiting for approval), and prints each entry's laid-out times and the
+  measured time beside the fitted one.
+- `dev-arch sync` warns when the calendar source is on but the binary has no Calendar access,
+  so meetings are not read.
+- `dev-arch calendar [connect | reimport]` shows Calendar access, asks macOS for it, and reads
+  90 days of meetings again. The `dev-arch` binary carries its own Info.plist with the Calendar
+  usage text, so macOS can ask for access outside the app bundle.
+
+### Changed
+- "Fit days to N h" lays entries inside the day's presence windows (session spans joined over
+  breaks up to 30 minutes). An entry that would start in a break waits for the next window
+  while the windows left hold the rest of the day, so lunch and time away stay empty unless
+  the day needs them.
+- The daily automation rewrites a journal written before its day ended, such as one made
+  mid-day for a time sheet. Confirmed journals stay.
+
+### Fixed
+- A journal whose answer labels fewer than half the day's sessions is asked for again once,
+  and fails rather than standing as the day's journal with raw prompts as session labels.
+
 ## [0.11.0] - 2026-10-25
 
 ### Added

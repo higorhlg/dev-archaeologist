@@ -383,6 +383,12 @@ impl Store {
         Ok(())
     }
 
+    /// When the day's journal was written, in unix ms.
+    pub fn journal_written_ms(&self, day: &str) -> Result<Option<i64>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row("SELECT created_at FROM journals WHERE day = ?1", [day], |r| r.get(0)).optional()?)
+    }
+
     pub fn journal(&self, day: &str) -> Result<Option<Journal>> {
         let conn = self.conn.lock().unwrap();
         Ok(conn

@@ -5,11 +5,14 @@
 //!   dev-arch day [YYYY-MM-DD]    print one day's sessions and achievements
 //!   dev-arch journal YYYY-MM-DD  write the day's journal with the Claude API
 //!   dev-arch report FROM TO [session|ticket_day|project_day] [work|personal|all]
+//!                [--fit HOURS] [--csv [PATH]] [--include-unapproved]
+//!                fit work days to HOURS inside their presence windows; write the Toggl CSV
 //!   dev-arch find-tickets FROM TO [work|personal|all]  suggest tickets from Jira and GitHub
 //!   dev-arch schedule [HH:MM HH:MM | off]  set Mon–Fri hours with lunch 12–13
 //!   dev-arch gaps [YYYY-MM-DD]   print the day's gaps inside work hours
 //!   dev-arch fill DAY PROJECT     assign a day's unaccounted blocks to one project
 //!   dev-arch approve-bridges DAY approve a day's bridged gaps
+//!   dev-arch calendar [connect|reimport]  Calendar access; ask for it; read 90 days of meetings again
 //!   dev-arch sync [--tickets]    read every source since the last poll, sync tickets when due
 //!                                (or now with --tickets), run the daily automation
 //!   dev-arch weekly [YYYY-MM-DD] write the work report for the week holding the day
@@ -62,6 +65,98 @@ fn print_day(p: &Pipeline, day: &str) -> Result<()> {
     Ok(())
 }
 
+/// The value after `flag`, as in `--fit 8`.
+fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str)
+}
+
+/// `args` without the flags `report` reads and their values.
+fn positional(args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut it = args.iter().peekable();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--fit" => {
+                it.next();
+            }
+            "--csv" => {
+                it.next_if(|v| !v.starts_with("--"));
+            }
+            "--include-unapproved" => {}
+            _ => out.push(a.clone()),
+        }
+    }
+    out
+}
+
+/// `report FROM TO [grouping] [context] [--fit HOURS] [--csv [PATH]] [--include-unapproved]`.
+/// Prints each entry with its laid-out times; with `--csv`, writes the Toggl CSV of approved
+/// work entries (all work entries with `--include-unapproved`) to PATH or ~/Downloads.
+fn print_report(p: &Pipeline, args: &[String]) -> Result<()> {
+    let pos = positional(args);
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let fit_hours: Option<f64> = flag_value(args, "--fit").map(str::parse).transpose()?;
+    let q = devarch::reports::ReportQuery {
+        from: pos.get(2).cloned().unwrap_or_else(|| today.clone()),
+        to: pos.get(3).cloned().unwrap_or(today),
+        grouping: serde_json::from_value(serde_json::json!(pos.get(4).map(String::as_str).unwrap_or("ticket_day")))?,
+        tickets: devarch::reports::TicketMode::Prefix,
+        context: serde_json::from_value(serde_json::json!(pos.get(5).map(String::as_str).unwrap_or("work")))?,
+        fit_day_min: fit_hours.map(|h| (h * 60.0).round() as i64),
+    };
+    let r = api::report(p, &q)?;
+    println!("{} min total · {} approved · {} to review · prefixes {:?}", r.total_min, r.approved_min, r.review_count, r.known_prefixes);
+    let at = |ms: i64| chrono::DateTime::from_timestamp_millis(ms).unwrap().with_timezone(&Local).format("%H:%M").to_string();
+    let mut day_total: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
+    for e in r.entries.iter().filter(|e| !e.skip) {
+        let t = day_total.entry(&e.day).or_default();
+        t.0 += e.duration_min;
+        t.1 += e.measured_min;
+        let tickets = [&e.jira, &e.github].into_iter().flatten().map(|t| format!("{} ({})", t.key, t.source)).collect::<Vec<_>>().join(" ");
+        println!(
+            "  {} {}–{} {:>4}m (measured {:>3}m)  {:<22} {:<28} {}",
+            e.day,
+            at(e.start_ts),
+            at(e.start_ts + e.duration_min * 60_000),
+            e.duration_min,
+            e.measured_min,
+            e.toggl_project,
+            if tickets.is_empty() { "-".to_string() } else { tickets },
+            devarch::event::clip(&e.label, 70)
+        );
+    }
+    for (day, (min, measured)) in &day_total {
+        println!("  {day}: {}h{:02} (measured {}h{:02})", min / 60, min % 60, measured / 60, measured % 60);
+    }
+    if args.iter().any(|a| a == "--csv") {
+        write_report_csv(p, &r, args)?;
+    }
+    Ok(())
+}
+
+fn write_report_csv(p: &Pipeline, r: &devarch::reports::Report, args: &[String]) -> Result<()> {
+    let email = devarch::settings::Settings::load(&p.store)?.toggl.email;
+    let unapproved = args.iter().any(|a| a == "--include-unapproved");
+    let csv = if unapproved {
+        devarch::reports::to_csv(devarch::reports::exportable_unapproved(r), &email)
+    } else {
+        devarch::reports::to_csv(devarch::reports::exportable(r), &email)
+    };
+    let path = match flag_value(args, "--csv").filter(|v| !v.starts_with("--")) {
+        Some(path) => std::path::PathBuf::from(path),
+        None => dirs::download_dir()
+            .or_else(dirs::home_dir)
+            .ok_or_else(|| anyhow::anyhow!("no Downloads folder"))?
+            .join(format!("toggl-{}-to-{}.csv", r.query.from, r.query.to)),
+    };
+    std::fs::write(&path, csv)?;
+    println!("wrote {}", path.display());
+    if !unapproved && r.review_count > 0 {
+        println!("  {} unapproved entries left out; approve them in Reports or pass --include-unapproved", r.review_count);
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let db = default_db_path();
@@ -80,24 +175,7 @@ fn main() -> Result<()> {
             api::generate_journal(&p, &day)?;
             print_day(&p, &day)?;
         }
-        Some("report") => {
-            let today = Local::now().format("%Y-%m-%d").to_string();
-            let q = devarch::reports::ReportQuery {
-                from: args.get(2).cloned().unwrap_or_else(|| today.clone()),
-                to: args.get(3).cloned().unwrap_or(today),
-                grouping: serde_json::from_value(serde_json::json!(args.get(4).map(String::as_str).unwrap_or("ticket_day")))?,
-                tickets: devarch::reports::TicketMode::Prefix,
-                context: serde_json::from_value(serde_json::json!(args.get(5).map(String::as_str).unwrap_or("work")))?,
-                fit_day_min: None,
-            };
-            let r = api::report(&p, &q)?;
-            println!("{} min total · {} approved · {} to review · prefixes {:?}", r.total_min, r.approved_min, r.review_count, r.known_prefixes);
-            for e in &r.entries {
-                let t = [&e.jira, &e.github].into_iter().flatten().map(|t| format!("{} ({})", t.key, t.source)).collect::<Vec<_>>().join(" ");
-                let t = if t.is_empty() { "-".to_string() } else { t };
-                println!("  {} {:>4}m  {:<22} {:<28} {}", e.day, e.duration_min, e.toggl_project, t, devarch::event::clip(&e.label, 70));
-            }
-        }
+        Some("report") => print_report(&p, &args)?,
         Some("find-tickets") => {
             let today = Local::now().format("%Y-%m-%d").to_string();
             let q = devarch::reports::ReportQuery {
@@ -150,6 +228,19 @@ fn main() -> Result<()> {
             let day = arg_day(&args);
             println!("approved {} bridges", api::approve_bridges(&p, &day, &day)?);
         }
+        Some("calendar") => {
+            let n = match args.get(2).map(String::as_str) {
+                Some("connect") => api::connect_calendar(&p).map(|_| None)?,
+                Some("reimport") => Some(api::reimport_meetings(&p)?),
+                None => None,
+                _ => bail!("usage: dev-arch calendar [connect | reimport]"),
+            };
+            let s = api::calendar_status(&p)?;
+            println!("calendar access: {:?} · {} calendars · excluded {:?}", s.access, s.calendars.len(), s.excluded);
+            if let Some(n) = n {
+                println!("{n} new meetings");
+            }
+        }
         Some("status") => {
             let s = api::status(&p)?;
             println!("events: {:?}\ndays: {}\napi key: {}", s.event_counts, s.days.len(), if s.has_api_key { "set" } else { "not set" });
@@ -158,6 +249,10 @@ fn main() -> Result<()> {
             let started = std::time::Instant::now();
             let n = daemon::catch_up(&p, &mut devarch::backfill::AgentTail::default())?;
             println!("{} · {n} new events", Local::now().format("%Y-%m-%d %H:%M"));
+            let calendar_access = devarch::adapters::calendar::access();
+            if devarch::settings::Settings::load(&p.store)?.sources.calendar && calendar_access != devarch::adapters::calendar::Access::Granted {
+                println!("  warning: calendar is on but this binary has no Calendar access ({calendar_access:?}); meetings were not read");
+            }
             if devarch::sync::ticket_sync_due(&p.store)? || args.get(2).map(String::as_str) == Some("--tickets") {
                 let s = devarch::sync::sync_tickets(&p.store)?;
                 println!(
@@ -202,7 +297,7 @@ fn main() -> Result<()> {
             println!("API key saved to the Keychain");
         }
         Some("hook") => println!("Add this line to ~/.zshrc:\n  {}", api::install_shell_hook()?),
-        _ => bail!("usage: dev-arch discover|backfill|day|rebuild|journal|report|find-tickets|sync|sync-agent|weekly|status|daemon|set-key|hook"),
+        _ => bail!("usage: dev-arch discover|backfill|day|rebuild|journal|report|find-tickets|calendar|sync|sync-agent|weekly|status|daemon|set-key|hook"),
     }
     Ok(())
 }

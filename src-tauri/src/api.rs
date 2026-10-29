@@ -448,7 +448,7 @@ pub fn export_toggl_csv(p: &Pipeline, q: &ReportQuery) -> Result<String> {
     let settings = Settings::load(&p.store)?;
     let dir = dirs::download_dir().or_else(dirs::home_dir).ok_or_else(|| anyhow!("no Downloads folder"))?;
     let path = dir.join(format!("toggl-{}-to-{}.csv", q.from, q.to));
-    std::fs::write(&path, reports::to_csv(&report, &settings.toggl.email))?;
+    std::fs::write(&path, reports::to_csv(reports::exportable(&report), &settings.toggl.email))?;
     let _ = std::process::Command::new("open").arg("-R").arg(&path).status();
     Ok(path.to_string_lossy().into_owned())
 }
