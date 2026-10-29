@@ -197,10 +197,16 @@ fn entry_row(e: &ReportEntry, b: crate::reports::Piece, color: &str) -> String {
     };
     let tags = ticket(&e.jira, &e.jira_info) + &ticket(&e.github, &e.github_info);
     let tags = if tags.is_empty() { r#"<span class="tag none">no ticket</span>"#.to_string() } else { tags };
-    let part = if e.pieces.len() > 1 { r#"<span class="tag split">split</span>"# } else { "" };
+    let suggested = e.suggestion.as_ref().is_some_and(|s| e.description.split(' ').any(|w| w == s.info.key) && e.jira.as_ref().is_none_or(|j| j.key != s.info.key));
+    let part = format!(
+        "{}{}",
+        if suggested { r#"<span class="tag suggested" title="Ticket from Find tickets, not yet confirmed">suggested</span>"# } else { "" },
+        if e.pieces.len() > 1 { r#"<span class="tag split">split</span>"# } else { "" }
+    );
     format!(
-        r#"<li><div class="what"><div class="desc">{}</div><div class="meta"><span class="pname" style="color:{color}"><i style="background:{color}"></i>{}</span>{tags}{part}</div></div><div class="when"><span class="range">{} – {}</span><span class="dur">{}</span></div></li>"#,
-        esc(&e.label),
+        r#"<li><div class="what"><div class="desc">{}</div><div class="label">{}</div><div class="meta"><span class="pname" style="color:{color}"><i style="background:{color}"></i>{}</span>{tags}{part}</div></div><div class="when"><span class="range">{} – {}</span><span class="dur">{}</span></div></li>"#,
+        esc(&e.description),
+        if e.description == e.label { String::new() } else { esc(&e.label) },
         esc(&e.toggl_project),
         clock(b.start_ts),
         clock(end),
@@ -252,10 +258,14 @@ main{max-width:1040px;margin:0 auto;padding:24px 16px 48px}
 .entries li:hover{background:var(--bg)}
 .what{flex:1;min-width:0}
 .desc{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.label{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.label:empty{display:none}
 .meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:3px;font-size:12px}
 .tag{background:var(--tag);color:var(--muted);border-radius:4px;padding:1px 7px;font-size:11px;font-weight:500;text-decoration:none;white-space:nowrap}
 a.tag:hover{color:var(--ink)}
 .tag.none{font-style:italic;font-weight:400}
+.tag.suggested{background:#fff1d6;color:#8a5a00}
+@media (prefers-color-scheme:dark){.tag.suggested{background:#3d2e10;color:#f0c46a}}
 .tag.split{background:transparent;border:1px dashed var(--line)}
 .when{display:flex;align-items:center;gap:18px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .when .range{color:var(--muted);font-size:13px}

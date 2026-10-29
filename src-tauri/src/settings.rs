@@ -142,6 +142,36 @@ pub struct TogglSettings {
     pub default_billable: bool,
     /// Local project name → Toggl project. An unmapped project keeps its local name.
     pub project_map: BTreeMap<String, TogglProject>,
+    /// How the `epic_ticket` ticket mode words entries.
+    pub descriptions: DescriptionRules,
+}
+
+/// Descriptions for the `epic_ticket` ticket mode, which writes "EPIC TICKET".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DescriptionRules {
+    /// The epic for a Jira ticket that has none, such as a KTLO epic. Empty writes the ticket alone.
+    pub fallback_epic: String,
+    /// The description of an entry with no Jira ticket. Empty keeps the entry's label.
+    pub no_ticket: String,
+    /// Meeting descriptions by title; the first rule whose text the meeting title holds wins.
+    pub meetings: Vec<MeetingDescription>,
+    /// The description of a meeting no rule matches. Empty keeps the meeting title.
+    pub other_meeting: String,
+    /// Jira project prefixes the time sheet files under, such as `SHOP`. A ticket from another
+    /// project counts as no ticket. Empty takes every project.
+    pub jira_projects: Vec<String>,
+    /// An entry with no ticket in those projects takes its open "Find tickets" suggestion
+    /// before the no-ticket text.
+    pub use_suggestions: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MeetingDescription {
+    /// Matched without regard to case.
+    pub title_contains: String,
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

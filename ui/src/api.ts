@@ -68,7 +68,7 @@ export type WorkEvent = {
 };
 
 export type Grouping = "session" | "ticket_day" | "project_day";
-export type TicketMode = "prefix" | "tag" | "off";
+export type TicketMode = "prefix" | "tag" | "off" | "epic_ticket";
 export type Context = "work" | "personal";
 export type ContextFilter = Context | "all";
 export type ReportPrefs = { range: string; grouping: Grouping; tickets: TicketMode; context: ContextFilter; fit_day: boolean; fit_hours: number };

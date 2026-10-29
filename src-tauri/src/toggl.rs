@@ -73,6 +73,29 @@ pub fn projects(token: &str, workspace_id: i64) -> Result<Vec<TogglProjectInfo>>
     Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
+/// One time entry as Toggl stores it, for reading back what was logged.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoggedEntry {
+    pub start: String,
+    /// Seconds; negative while the timer runs.
+    pub duration: i64,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<i64>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
+/// The user's time entries started in the last `days` days, newest first.
+pub fn recent_entries(days: i64) -> Result<Vec<LoggedEntry>> {
+    let token = token().ok_or_else(|| anyhow!("Add a Toggl API token in Sources first"))?;
+    let fmt = |d: chrono::DateTime<Utc>| d.format("%Y-%m-%d").to_string();
+    let now = Utc::now();
+    let v = get(&token, &format!("/me/time_entries?start_date={}&end_date={}", fmt(now - chrono::Duration::days(days)), fmt(now + chrono::Duration::days(1))))?;
+    Ok(serde_json::from_value(v)?)
+}
+
 fn create_entry(token: &str, workspace_id: i64, e: &ReportEntry, piece: Piece, project_id: Option<i64>) -> Result<i64> {
     let start = Utc.timestamp_millis_opt(piece.start_ts).single().ok_or_else(|| anyhow!("bad start time"))?;
     let body = json!({

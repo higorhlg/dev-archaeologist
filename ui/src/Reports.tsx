@@ -40,6 +40,7 @@ const GROUPINGS: { id: Grouping; label: string }[] = [
 const TICKET_MODES: { id: TicketMode; label: string }[] = [
   { id: "prefix", label: "Ticket in description" },
   { id: "tag", label: "Ticket as tag" },
+  { id: "epic_ticket", label: "Epic and ticket" },
   { id: "off", label: "No tickets" },
 ];
 

@@ -34,6 +34,8 @@ pub enum TicketMode {
     Prefix,
     /// The ticket goes into the Toggl tags.
     Tag,
+    /// `SHOP-1199 SHOP-1331`: the Jira ticket's epic, then the ticket, as `DescriptionRules` words it.
+    EpicTicket,
     Off,
 }
 
@@ -161,6 +163,11 @@ impl TicketLookups {
     fn suggestion_of(&self, session_ids: &[String], key: &str) -> Option<Suggestion> {
         let s = session_ids.iter().filter_map(|id| self.suggestions.get(id)).find(|s| s.ticket == key)?;
         Some(Suggestion { info: self.info_for(&s.ticket), reason: s.reason.clone(), by_ai: s.by_ai, auto: s.auto })
+    }
+
+    /// Some known ticket names `key` as its epic.
+    fn is_epic(&self, key: &str) -> bool {
+        self.info.values().any(|i| i.epic.as_ref().is_some_and(|e| e.key == key))
     }
 
     fn suggestion_for(&self, session_ids: &[String]) -> Option<Suggestion> {
@@ -370,6 +377,51 @@ struct EntryContext<'a> {
     lookups: &'a TicketLookups,
 }
 
+/// The `epic_ticket` description: a meeting by its rule, a Jira ticket as "EPIC TICKET" (the
+/// fallback epic when Jira gives it none and the ticket is in the fallback epic's project, the
+/// key alone when it is an epic itself or has no epic to take), else the no-ticket text. The
+/// ticket is the one `filed_jira_key` picks. Each rule left empty falls back to the entry's label.
+/// What `epic_ticket_description` words.
+struct Describe<'a> {
+    project: Option<&'a str>,
+    jira: Option<&'a Ticket>,
+    suggestion: Option<&'a Suggestion>,
+    label: &'a str,
+}
+
+/// The Jira key an `epic_ticket` description files under: the entry's ticket when it is in the
+/// rules' Jira projects, else its open suggestion in them when the rules take suggestions.
+fn filed_jira_key(rules: &crate::settings::DescriptionRules, jira: Option<&Ticket>, suggestion: Option<&Suggestion>) -> Option<String> {
+    let in_scope = |key: &str| !tickets::is_github_key(key) && (rules.jira_projects.is_empty() || rules.jira_projects.iter().any(|p| key.split('-').next() == Some(p.as_str())));
+    jira.map(|t| t.key.clone())
+        .filter(|k| in_scope(k))
+        .or_else(|| suggestion.filter(|_| rules.use_suggestions).map(|s| s.info.key.clone()).filter(|k| in_scope(k)))
+}
+
+fn epic_ticket_description(cx: &EntryContext, d: Describe) -> String {
+    let Describe { project, jira, suggestion, label } = d;
+    let rules = &cx.settings.toggl.descriptions;
+    let or_label = |text: &str| if text.is_empty() { label.to_string() } else { text.to_string() };
+    if project == Some(crate::pipeline::WORK_MEETINGS) {
+        let title = label.to_lowercase();
+        return match rules.meetings.iter().find(|m| !m.title_contains.is_empty() && title.contains(&m.title_contains.to_lowercase())) {
+            Some(m) => m.description.clone(),
+            None => or_label(&rules.other_meeting),
+        };
+    }
+    let Some(key) = filed_jira_key(rules, jira, suggestion) else { return or_label(&rules.no_ticket) };
+    if cx.lookups.is_epic(&key) {
+        return key;
+    }
+    let epic = cx.lookups.info.get(&key).and_then(|i| i.epic.as_ref()).map(|e| e.key.clone()).filter(|k| !k.is_empty());
+    let same_project = |a: &str, b: &str| a.split('-').next() == b.split('-').next();
+    let fallback = Some(rules.fallback_epic.clone()).filter(|f| same_project(f, &key)).unwrap_or_default();
+    match epic.unwrap_or(fallback) {
+        e if e.is_empty() || e == key => key,
+        e => format!("{e} {key}"),
+    }
+}
+
 fn build_entry(key: String, group: Vec<&Loaded>, cx: &EntryContext) -> ReportEntry {
     let EntryContext { q, settings, sent, lookups } = *cx;
     let first = group.iter().min_by_key(|l| l.session.start_ts).unwrap();
@@ -378,22 +430,27 @@ fn build_entry(key: String, group: Vec<&Loaded>, cx: &EntryContext) -> ReportEnt
     let jira = group.iter().find_map(|l| l.jira.clone());
     let github = group.iter().find_map(|l| l.github.clone());
     let label = joined_labels(&group);
+    let session_ids: Vec<String> = group.iter().map(|l| l.session.id.clone()).collect();
+    let suggestion = match (&jira, &github) {
+        (Some(t), _) if t.source == "tracker" => lookups.suggestion_of(&session_ids, &t.key),
+        (Some(_), _) => None,
+        (None, None) => lookups.suggestion_for(&session_ids),
+        (None, Some(_)) => lookups.suggestion_for(&session_ids).filter(|s| !tickets::is_github_key(&s.info.key)),
+    };
     let (description, tags) = match (jira.as_ref().or(github.as_ref()), q.tickets) {
+        (_, TicketMode::EpicTicket) => {
+            let d = Describe { project: project.as_deref(), jira: jira.as_ref(), suggestion: suggestion.as_ref(), label: &label };
+            (epic_ticket_description(cx, d), vec![])
+        }
         (Some(t), TicketMode::Prefix) => (format!("{} · {label}", t.key), vec![]),
         (Some(t), TicketMode::Tag) => (label.clone(), vec![t.key.clone()]),
         _ => (label.clone(), vec![]),
     };
     let reasons = review_reasons(&group);
-    let session_ids: Vec<String> = group.iter().map(|l| l.session.id.clone()).collect();
     ReportEntry {
         jira_info: jira.as_ref().and_then(|t| lookups.info.get(&t.key).cloned()),
         github_info: github.as_ref().and_then(|t| lookups.info.get(&t.key).cloned()),
-        suggestion: match (&jira, &github) {
-            (Some(t), _) if t.source == "tracker" => lookups.suggestion_of(&session_ids, &t.key),
-            (Some(_), _) => None,
-            (None, None) => lookups.suggestion_for(&session_ids),
-            (None, Some(_)) => lookups.suggestion_for(&session_ids).filter(|s| !tickets::is_github_key(&s.info.key)),
-        },
+        suggestion,
         day: first.session.day.clone(),
         start_ts: first.session.start_ts,
         duration_min: group.iter().map(|l| l.report_min + l.gap_min).sum(),
@@ -791,6 +848,39 @@ mod tests {
             "work running into the meeting resumes after it"
         );
         assert_eq!(entries[2].start_ts, at("13:15"));
+    }
+
+    #[test]
+    fn epic_ticket_descriptions_follow_the_rules() {
+        let info = |key: &str, epic: Option<&str>| {
+            (key.to_string(), TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: "jira".into(), epic: epic.map(|e| crate::trackers::Epic { key: e.into(), title: String::new() }) })
+        };
+        let lookups = TicketLookups { info: HashMap::from([info("SHOP-1331", Some("SHOP-1199")), info("SHOP-1385", None), info("SHOP-1200", Some("SHOP-1199"))]), suggestions: HashMap::new() };
+        let mut settings = Settings::default();
+        settings.toggl.descriptions = crate::settings::DescriptionRules {
+            fallback_epic: "SHOP-1126".into(),
+            no_ticket: "SHOP-1126 KTLO".into(),
+            meetings: vec![crate::settings::MeetingDescription { title_contains: "squad".into(), description: "MEETING-1 Squad Meeting".into() }],
+            other_meeting: "MEETING-1 Internal Meeting".into(),
+            jira_projects: vec!["SHOP".into()],
+            use_suggestions: true,
+        };
+        let q = ReportQuery { from: String::new(), to: String::new(), grouping: Grouping::TicketDay, tickets: TicketMode::EpicTicket, context: ContextFilter::Work, fit_day_min: None, fit_drift_min: None };
+        let sent = BTreeSet::new();
+        let cx = EntryContext { q: &q, settings: &settings, sent: &sent, lookups: &lookups };
+        let jira = |key: &str| Some(Ticket { key: key.into(), source: "branch".into() });
+        let describe = |project: &str, t: Option<Ticket>, label: &str| epic_ticket_description(&cx, Describe { project: Some(project), jira: t.as_ref(), suggestion: None, label });
+        assert_eq!(describe("api", jira("SHOP-1331"), "x"), "SHOP-1199 SHOP-1331");
+        assert_eq!(describe("api", jira("SHOP-1385"), "x"), "SHOP-1126 SHOP-1385", "no epic in Jira: the fallback epic");
+        assert_eq!(describe("api", jira("SHOP-1199"), "x"), "SHOP-1199", "an epic stands alone");
+        assert_eq!(describe("api", jira("PLAT-5507"), "x"), "SHOP-1126 KTLO", "a ticket outside the Jira projects counts as none");
+        let suggested = Suggestion { info: lookups.info["SHOP-1331"].clone(), reason: String::new(), by_ai: true, auto: false };
+        let plat = jira("PLAT-5507");
+        let d = Describe { project: Some("api"), jira: plat.as_ref(), suggestion: Some(&suggested), label: "x" };
+        assert_eq!(epic_ticket_description(&cx, d), "SHOP-1199 SHOP-1331", "an open suggestion comes before the no-ticket text");
+        assert_eq!(describe("api", None, "x"), "SHOP-1126 KTLO");
+        assert_eq!(describe(crate::pipeline::WORK_MEETINGS, None, "Checkout Squad Daily"), "MEETING-1 Squad Meeting");
+        assert_eq!(describe(crate::pipeline::WORK_MEETINGS, None, "1:1 with lead"), "MEETING-1 Internal Meeting");
     }
 
     #[test]

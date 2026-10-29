@@ -5,7 +5,8 @@
 //!   dev-arch day [YYYY-MM-DD]    print one day's sessions and achievements
 //!   dev-arch journal YYYY-MM-DD  write the day's journal with the Claude API
 //!   dev-arch report FROM TO [session|ticket_day|project_day] [work|personal|all]
-//!                [--fit HOURS [--drift MIN]] [--csv [PATH]] [--html [PATH]] [--include-unapproved]
+//!                [--tickets prefix|tag|off|epic_ticket] [--fit HOURS [--drift MIN]]
+//!                [--csv [PATH]] [--html [PATH]] [--include-unapproved]
 //!                fit work days to HOURS inside their presence windows, each day moving up to
 //!                about MIN minutes toward its presence; write the Toggl CSV and a readable HTML page
 //!   dev-arch find-tickets FROM TO [work|personal|all]  suggest tickets from Jira and GitHub
@@ -14,6 +15,7 @@
 //!   dev-arch fill DAY PROJECT     assign a day's unaccounted blocks to one project
 //!   dev-arch approve-bridges DAY approve a day's bridged gaps
 //!   dev-arch away DAY [HH:MM HH:MM | clear]  record time away; fitted days leave it empty
+//!   dev-arch toggl recent [DAYS] print the time entries already in Toggl (read only)
 //!   dev-arch calendar [connect|reimport]  Calendar access; ask for it; read 90 days of meetings again
 //!   dev-arch sync [--tickets]    read every source since the last poll, sync tickets when due
 //!                                (or now with --tickets), run the daily automation
@@ -78,7 +80,7 @@ fn positional(args: &[String]) -> Vec<String> {
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--fit" | "--drift" => {
+            "--fit" | "--drift" | "--tickets" => {
                 it.next();
             }
             "--csv" | "--html" => {
@@ -91,7 +93,7 @@ fn positional(args: &[String]) -> Vec<String> {
     out
 }
 
-/// `report FROM TO [grouping] [context] [--fit HOURS [--drift MIN]] [--csv [PATH]] [--html [PATH]] [--include-unapproved]`.
+/// `report FROM TO [grouping] [context] [--tickets prefix|tag|off|epic_ticket] [--fit HOURS [--drift MIN]] [--csv [PATH]] [--html [PATH]] [--include-unapproved]`.
 /// Prints each entry with its laid-out times; with `--csv`, writes the Toggl CSV of approved
 /// work entries (all work entries with `--include-unapproved`) to PATH or ~/Downloads.
 fn print_report(p: &Pipeline, args: &[String]) -> Result<()> {
@@ -102,7 +104,7 @@ fn print_report(p: &Pipeline, args: &[String]) -> Result<()> {
         from: pos.get(2).cloned().unwrap_or_else(|| today.clone()),
         to: pos.get(3).cloned().unwrap_or(today),
         grouping: serde_json::from_value(serde_json::json!(pos.get(4).map(String::as_str).unwrap_or("ticket_day")))?,
-        tickets: devarch::reports::TicketMode::Prefix,
+        tickets: serde_json::from_value(serde_json::json!(flag_value(args, "--tickets").unwrap_or("prefix")))?,
         context: serde_json::from_value(serde_json::json!(pos.get(5).map(String::as_str).unwrap_or("work")))?,
         fit_day_min: fit_hours.map(|h| (h * 60.0).round() as i64),
         fit_drift_min: flag_value(args, "--drift").map(str::parse).transpose()?,
@@ -263,6 +265,20 @@ fn main() -> Result<()> {
             let spans = devarch::away::load(&p.store)?.remove(&day).unwrap_or_default();
             println!("{day} away: {}", if spans.is_empty() { "-".into() } else { spans.iter().map(|(s, e)| format!("{s}–{e}")).collect::<Vec<_>>().join(", ") });
         }
+        Some("toggl") => match args.get(2).map(String::as_str) {
+            Some("recent") => {
+                let days = args.get(3).and_then(|d| d.parse().ok()).unwrap_or(14);
+                let token = devarch::toggl::token().ok_or_else(|| anyhow::anyhow!("no Toggl token"))?;
+                let account = devarch::toggl::account(&token)?;
+                let names: std::collections::HashMap<i64, String> =
+                    devarch::toggl::projects(&token, account.workspace_id)?.into_iter().map(|p| (p.id, p.name)).collect();
+                for e in devarch::toggl::recent_entries(days)? {
+                    let project = e.project_id.and_then(|id| names.get(&id).cloned()).unwrap_or_else(|| "-".into());
+                    println!("  {} {:>6}m  {:<24} {}", &e.start[..16.min(e.start.len())], e.duration.max(0) / 60, project, e.description.unwrap_or_default());
+                }
+            }
+            _ => bail!("usage: dev-arch toggl recent [DAYS]"),
+        },
         Some("calendar") => {
             let n = match args.get(2).map(String::as_str) {
                 Some("connect") => api::connect_calendar(&p).map(|_| None)?,
@@ -332,7 +348,7 @@ fn main() -> Result<()> {
             println!("API key saved to the Keychain");
         }
         Some("hook") => println!("Add this line to ~/.zshrc:\n  {}", api::install_shell_hook()?),
-        _ => bail!("usage: dev-arch discover|backfill|day|rebuild|journal|report|find-tickets|away|calendar|sync|sync-agent|weekly|status|daemon|set-key|hook"),
+        _ => bail!("usage: dev-arch discover|backfill|day|rebuild|journal|report|find-tickets|away|toggl|calendar|sync|sync-agent|weekly|status|daemon|set-key|hook"),
     }
     Ok(())
 }

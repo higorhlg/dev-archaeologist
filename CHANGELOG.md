@@ -18,6 +18,14 @@ All notable changes to Dev Archaeologist. The format follows
   tracker's list view: a week total with a bar per day, time per project, and per day a
   timeline (time away hatched) above one row per entry piece with its project, tickets, time
   range and duration.
+- Ticket mode "Epic and ticket" (`epic_ticket`) writes descriptions as `EPIC TICKET`, such as
+  `SHOP-1199 SHOP-1331`, from the epic Jira gives the ticket. Rules in the Toggl settings name a
+  fallback epic for tickets without one (in its own Jira project only), the description of an
+  entry with no ticket, meeting descriptions by title, the Jira projects that count, and whether
+  an open "Find tickets" suggestion fills an entry with no ticket. The timesheet page shows the
+  description above the work label and marks suggested tickets.
+- `dev-arch report --tickets MODE` picks the ticket mode.
+- `dev-arch toggl recent [DAYS]` prints the time entries already in Toggl, read only.
 - `dev-arch away DAY [HH:MM HH:MM | clear]` records time away from work. Fitted days leave it
   empty and do not count it as presence; work that runs into it continues after it.
 - `dev-arch sync` warns when the calendar source is on but the binary has no Calendar access,
