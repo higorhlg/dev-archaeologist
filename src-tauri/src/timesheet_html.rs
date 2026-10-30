@@ -37,6 +37,20 @@ fn minute_of_day(day: NaiveDate, ms: i64) -> i64 {
     (ms - midnight) / 60_000
 }
 
+/// The timesheet page for `report`, with the away time stored for its days and a week of five
+/// fitted days (8 h each when the report is not fitted).
+/// @param include_unapproved also lists entries still waiting for approval.
+pub fn page(store: &crate::store::Store, report: &Report, include_unapproved: bool) -> anyhow::Result<String> {
+    let entries: Vec<&ReportEntry> = if include_unapproved {
+        crate::reports::exportable_unapproved(report).collect()
+    } else {
+        crate::reports::exportable(report).collect()
+    };
+    let away = crate::away::spans_ms(store, &report.query.from, &report.query.to)?;
+    let week_min = report.query.fit_day_min.unwrap_or(8 * 60) * 5;
+    Ok(render(report, &entries, &away, week_min))
+}
+
 /// The page for `entries` of `report`, laid out like a time tracker's list view.
 /// @param entries the entries to show, in start order: usually the work entries that would leave the app.
 /// @param away day → spans the user was away, from `away::spans_ms`.

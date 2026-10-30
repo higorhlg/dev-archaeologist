@@ -71,7 +71,16 @@ export type Grouping = "session" | "ticket_day" | "project_day";
 export type TicketMode = "prefix" | "tag" | "off" | "epic_ticket";
 export type Context = "work" | "personal";
 export type ContextFilter = Context | "all";
-export type ReportPrefs = { range: string; grouping: Grouping; tickets: TicketMode; context: ContextFilter; fit_day: boolean; fit_hours: number };
+export type ReportPrefs = {
+  range: string;
+  grouping: Grouping;
+  tickets: TicketMode;
+  context: ContextFilter;
+  fit_day: boolean;
+  fit_hours: number;
+  /** How far fitted days may drift from `fit_hours`, in minutes; 0 fits every day exactly. */
+  fit_drift_min: number;
+};
 export type ContextRules = {
   work_paths: string[];
   personal_paths: string[];
@@ -80,11 +89,27 @@ export type ContextRules = {
 };
 export type ProjectContext = { project: string; context: Context; chosen: boolean };
 export type TogglProject = { name: string; id: number | null; client: string; billable: boolean; skip: boolean };
+export type MeetingDescription = { title_contains: string; description: string };
+/** How the "Epic and ticket" mode words entries. */
+export type DescriptionRules = {
+  fallback_epic: string;
+  no_ticket: string;
+  meetings: MeetingDescription[];
+  other_meeting: string;
+  jira_projects: string[];
+  mine_only_projects: string[];
+  use_suggestions: boolean;
+  fold_no_ticket: boolean;
+};
+/** An entry added to every worked day on `weekday` (0 = Monday) at `start` (`HH:MM`). */
+export type RecurringEntry = { weekday: number; start: string; minutes: number; description: string; project: string; client: string; billable: boolean };
 export type TogglSettings = {
   email: string;
   workspace_id: number | null;
   default_billable: boolean;
   project_map: Record<string, TogglProject>;
+  descriptions: DescriptionRules;
+  recurring: RecurringEntry[];
 };
 
 export type WorkSchedule = {
@@ -142,8 +167,21 @@ export type Status = {
 };
 
 export type Ticket = { key: string; source: string };
-/** `fit_day_min` scales each work day's entries to that many minutes; null reports measured time. */
-export type ReportQuery = { from: string; to: string; grouping: Grouping; tickets: TicketMode; context: ContextFilter; fit_day_min?: number | null };
+/**
+ * `fit_day_min` scales each work day's entries to that many minutes; null reports measured time.
+ * `fit_drift_min` lets fitted days move about that far from it, keeping the total.
+ */
+export type ReportQuery = {
+  from: string;
+  to: string;
+  grouping: Grouping;
+  tickets: TicketMode;
+  context: ContextFilter;
+  fit_day_min?: number | null;
+  fit_drift_min?: number | null;
+};
+/** One block of an entry's time when a fitted day splits it around meetings. */
+export type Piece = { start_ts: number; duration_min: number };
 export type ReportEntry = {
   key: string;
   day: string;
@@ -174,6 +212,8 @@ export type ReportEntry = {
   parallel_min: number;
   gap_min: number;
   pending_bridge_min: number;
+  /** Empty when the entry runs in one block from `start_ts`. */
+  pieces: Piece[];
 };
 export type Report = {
   query: ReportQuery;
@@ -260,7 +300,25 @@ export const api = {
   syncTickets: () => invoke<TicketSyncStatus>("sync_tickets"),
   openWeeklyReports: () => invoke<string>("open_weekly_reports"),
   daysNeedingLabels: (query: ReportQuery) => invoke<string[]>("days_needing_labels", { query }),
+  /** Writes the timesheet page to Downloads and opens it in the browser. */
+  openTimesheet: (query: ReportQuery) => invoke<string>("open_timesheet", { query }),
+  /** Learns ticket epics from a Toggl detailed-report CSV; returns how many tickets. */
+  importTogglHistory: (path: string) => invoke<number>("import_toggl_history", { path }),
+  /** Day → `[start, end]` local `HH:MM` spans the user was away. */
+  awayDays: (from: string, to: string) => invoke<Record<string, [string, string][]>>("away_days", { from, to }),
+  addAway: (day: string, start: string, end: string) => invoke<void>("add_away", { day, start, end }),
+  clearAway: (day: string) => invoke<void>("clear_away", { day }),
 };
+
+/** An entry's time as blocks: its pieces, or one block from its start. */
+export function blocks(e: ReportEntry): Piece[] {
+  return e.pieces.length ? e.pieces : [{ start_ts: e.start_ts, duration_min: e.duration_min }];
+}
+
+/** `125` → `2:05:00`, the way Toggl writes durations. */
+export function clock(min: number): string {
+  return `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}:00`;
+}
 
 /** Local calendar day as `YYYY-MM-DD`. */
 export function dayKey(d: Date): string {

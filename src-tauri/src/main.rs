@@ -267,6 +267,32 @@ async fn sync_tickets(p: State<'_, Pipeline>) -> CmdResult<devarch::sync::Ticket
 }
 
 #[tauri::command]
+fn open_timesheet(p: State<Pipeline>, query: ReportQuery) -> CmdResult<String> {
+    api::open_timesheet(&p, &query).map_err(err)
+}
+
+#[tauri::command]
+fn import_toggl_history(p: State<Pipeline>, path: String) -> CmdResult<usize> {
+    api::import_toggl_history(&p, &path).map_err(err)
+}
+
+#[tauri::command]
+fn away_days(p: State<Pipeline>, from: String, to: String) -> CmdResult<devarch::away::AwayDays> {
+    let days = devarch::away::load(&p.store).map_err(err)?;
+    Ok(days.into_iter().filter(|(d, _)| *d >= from && *d <= to).collect())
+}
+
+#[tauri::command]
+fn add_away(p: State<Pipeline>, day: String, start: String, end: String) -> CmdResult<()> {
+    devarch::away::add(&p.store, &day, &start, &end).map_err(err)
+}
+
+#[tauri::command]
+fn clear_away(p: State<Pipeline>, day: String) -> CmdResult<()> {
+    devarch::away::clear(&p.store, &day).map_err(err)
+}
+
+#[tauri::command]
 async fn open_weekly_reports(p: State<'_, Pipeline>) -> CmdResult<String> {
     let p = p.inner().clone();
     tauri::async_runtime::spawn_blocking(move || api::open_weekly_reports(&p)).await.map_err(|e| e.to_string())?.map_err(err)
@@ -289,7 +315,7 @@ fn main() {
             approve_bridges, fill_to_schedule, save_schedule, project_contexts, set_project_context, patch_settings, detect_contexts,
             calendar_status, connect_calendar, reimport_meetings, dismiss_suggestion, tracker_status, connect_jira,
             open_jira_token_page, open_ticket, find_tickets, ticket_sync_status, sync_tickets,
-            open_weekly_reports
+            open_weekly_reports, open_timesheet, import_toggl_history, away_days, add_away, clear_away
         ])
         .run(tauri::generate_context!())
         .expect("run the Dev Archaeologist window");

@@ -453,6 +453,33 @@ pub fn export_toggl_csv(p: &Pipeline, q: &ReportQuery) -> Result<String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// Writes the timesheet page for the query, entries waiting for approval included, to the
+/// Downloads folder and opens it in the browser.
+/// @returns the page's path.
+pub fn open_timesheet(p: &Pipeline, q: &ReportQuery) -> Result<String> {
+    let report = reports::build(&p.store, q)?;
+    let dir = dirs::download_dir().or_else(dirs::home_dir).ok_or_else(|| anyhow!("no Downloads folder"))?;
+    let path = dir.join(format!("timesheet-{}-to-{}.html", q.from, q.to));
+    std::fs::write(&path, crate::timesheet_html::page(&p.store, &report, true)?)?;
+    let _ = std::process::Command::new("open").arg(&path).status();
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Learns the epic each ticket is logged under from a Toggl detailed-report CSV.
+/// @returns how many tickets it learned.
+pub fn import_toggl_history(p: &Pipeline, path: &str) -> Result<usize> {
+    let path = shellexpand_home(path.trim());
+    Ok(crate::toggl_history::import(&p.store, &std::fs::read_to_string(&path)?)?.len())
+}
+
+/// `~/x` → the home folder's `x`.
+fn shellexpand_home(path: &str) -> std::path::PathBuf {
+    match (path.strip_prefix("~/"), dirs::home_dir()) {
+        (Some(rest), Some(home)) => home.join(rest),
+        _ => path.into(),
+    }
+}
+
 /// Writes this week's report so far, then shows the weekly reports folder in Finder.
 /// @returns the folder path.
 pub fn open_weekly_reports(p: &Pipeline) -> Result<String> {

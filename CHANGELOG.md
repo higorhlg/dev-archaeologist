@@ -8,6 +8,18 @@ All notable changes to Dev Archaeologist. The format follows
 ## [Unreleased]
 
 ### Added
+- A sidebar groups the app by purpose: Hours for Toggl (with a count of entries to approve), then
+  Day, Journal and Projects, with the work/personal switch and Settings at the bottom.
+- The timesheet (formerly Reports) moves through periods with arrows (today, a week or a month),
+  shows the period's total against its target with a bar per day, folds fit, drift, grouping and
+  description options into one line, and lists what still needs you (labels, suggested tickets,
+  bridges, approvals) with the action that clears each. Each day shows a timeline with away time
+  and Toggl-like rows (description over the work label, project, time range, `H:MM:SS`); a row
+  opens its tickets, label and notes. "Open page" writes and opens the timesheet page; away time
+  can be added or cleared per day.
+- Settings has tabs: Connections, Timesheet (Toggl email, description rules, weekly entries,
+  project mapping, Toggl history import), Work hours, Collection, and AI and automation.
+- `ReportPrefs.fit_drift_min` keeps the timesheet's drift.
 - `dev-arch report` takes `--fit HOURS` and `--csv [PATH]` (with `--include-unapproved` to
   write entries still waiting for approval), and prints each entry's laid-out times and the
   measured time beside the fitted one.

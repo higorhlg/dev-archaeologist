@@ -152,15 +152,9 @@ fn output_path(args: &[String], flag: &str, name: String) -> Result<std::path::P
 
 /// Writes the report as a readable HTML page, with the same entries `--csv` would write.
 fn write_report_html(p: &Pipeline, r: &devarch::reports::Report, args: &[String]) -> Result<()> {
-    let entries: Vec<&devarch::reports::ReportEntry> = if args.iter().any(|a| a == "--include-unapproved") {
-        devarch::reports::exportable_unapproved(r).collect()
-    } else {
-        devarch::reports::exportable(r).collect()
-    };
-    let away = devarch::away::spans_ms(&p.store, &r.query.from, &r.query.to)?;
-    let week_min = r.query.fit_day_min.unwrap_or(8 * 60) * 5;
+    let page = devarch::timesheet_html::page(&p.store, r, args.iter().any(|a| a == "--include-unapproved"))?;
     let path = output_path(args, "--html", format!("timesheet-{}-to-{}.html", r.query.from, r.query.to))?;
-    std::fs::write(&path, devarch::timesheet_html::render(r, &entries, &away, week_min))?;
+    std::fs::write(&path, page)?;
     println!("wrote {}", path.display());
     Ok(())
 }

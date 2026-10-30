@@ -117,6 +117,8 @@ pub struct ReportPrefs {
     pub fit_day: bool,
     /// The day length "Fit days" uses, kept while fitting is off.
     pub fit_hours: f64,
+    /// How far fitted days may drift from `fit_hours`, in minutes; 0 fits every day exactly.
+    pub fit_drift_min: i64,
 }
 
 impl Default for ReportPrefs {
@@ -128,6 +130,7 @@ impl Default for ReportPrefs {
             context: ContextFilter::Work,
             fit_day: false,
             fit_hours: 8.0,
+            fit_drift_min: 0,
         }
     }
 }
