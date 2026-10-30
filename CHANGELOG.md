@@ -28,6 +28,10 @@ All notable changes to Dev Archaeologist. The format follows
   several keys names none. Find tickets reads and keeps the body's keys for each pull request.
 - With `use_suggestions` on, a session with no Jira ticket takes its open suggestion that came
   through a pull request (a PR names it, or Jira links the PR). Word-match suggestions never do.
+- Recurring entries in the Toggl settings, such as a weekly company meeting: a weekday, start
+  time, length, description, Toggl project, client and billable flag. Reports add one to each
+  worked day on that weekday, already approved; fitted days hold it at its time like a meeting
+  and count it toward the day.
 - `dev-arch report --tickets MODE` picks the ticket mode.
 - `dev-arch toggl recent [DAYS]` prints the time entries already in Toggl, read only.
 - `dev-arch away DAY [HH:MM HH:MM | clear]` records time away from work. Fitted days leave it

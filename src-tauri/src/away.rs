@@ -48,7 +48,8 @@ pub fn spans_ms(store: &Store, from: &str, to: &str) -> Result<BTreeMap<String, 
     Ok(out)
 }
 
-fn local_ms(day: &str, time: &str) -> Result<i64> {
+/// `time` (`HH:MM`) on `day` (`YYYY-MM-DD`), local, in unix ms.
+pub fn local_ms(day: &str, time: &str) -> Result<i64> {
     let at = NaiveDateTime::new(NaiveDate::parse_from_str(day, "%Y-%m-%d")?, NaiveTime::parse_from_str(time, "%H:%M")?);
     Ok(Local.from_local_datetime(&at).earliest().ok_or_else(|| anyhow!("{day} {time} does not exist locally"))?.timestamp_millis())
 }

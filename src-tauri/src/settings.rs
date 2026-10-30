@@ -144,6 +144,25 @@ pub struct TogglSettings {
     pub project_map: BTreeMap<String, TogglProject>,
     /// How the `epic_ticket` ticket mode words entries.
     pub descriptions: DescriptionRules,
+    /// Entries that repeat every week, such as a company meeting.
+    pub recurring: Vec<RecurringEntry>,
+}
+
+/// A time entry that repeats on one weekday at a fixed time. Reports add it to each worked day
+/// that falls on that weekday, already approved; fitted days hold it like a meeting.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecurringEntry {
+    /// 0 = Monday … 6 = Sunday.
+    pub weekday: u32,
+    /// Local start, `HH:MM`.
+    pub start: String,
+    pub minutes: i64,
+    pub description: String,
+    /// The Toggl project and client it goes to.
+    pub project: String,
+    pub client: String,
+    pub billable: bool,
 }
 
 /// Descriptions for the `epic_ticket` ticket mode, which writes "EPIC TICKET".

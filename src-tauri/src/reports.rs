@@ -508,13 +508,20 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
     }
     let mut entries: Vec<ReportEntry> =
         groups.into_iter().map(|(k, g)| build_entry(k, g, &cx)).filter(|e| e.duration_min > 0).collect();
+    if q.context.admits(Context::Work) {
+        let recurring = recurring_entries(&settings.toggl.recurring, &entries, &sent)?;
+        entries.extend(recurring);
+    }
     entries.sort_by_key(|e| e.start_ts);
     if let Some(target) = q.fit_day_min.filter(|m| *m > 0) {
         let work_days = settings.schedule.as_ref().map_or_else(|| vec![0, 1, 2, 3, 4], |s| s.days.clone());
         let away = crate::away::spans_ms(store, &q.from, &q.to)?;
         let windows = without_away(presence_windows(&loaded), &away);
         let day_targets = drifted_targets(&windows, target, q.fit_drift_min.unwrap_or(0), &work_days);
-        let meetings = meeting_blocks(&loaded, q.grouping);
+        let mut meetings = meeting_blocks(&loaded, q.grouping);
+        for e in entries.iter().filter(|e| e.key.contains(RECURRING_KEY)) {
+            meetings.insert(e.key.clone(), vec![(e.start_ts, e.start_ts + e.duration_min * 60_000)]);
+        }
         let plan = FitPlan { target, day_targets: &day_targets, work_days: &work_days, windows: &windows, meetings: &meetings, away: &away };
         fit_days(&mut entries, &plan);
         entries.sort_by_key(|e| e.start_ts);
@@ -563,6 +570,52 @@ fn presence_windows(loaded: &[Loaded]) -> BTreeMap<String, Vec<(i64, i64)>> {
         *day_spans = joined;
     }
     spans
+}
+
+/// Marks the key of an entry made from a `RecurringEntry`.
+const RECURRING_KEY: &str = "|recurring|";
+
+/// One entry per recurring rule on each day that already has work and falls on the rule's
+/// weekday. They are approved, since the user set them up, and work context.
+/// @param entries the report's work entries, which say which days were worked.
+fn recurring_entries(rules: &[crate::settings::RecurringEntry], entries: &[ReportEntry], sent: &BTreeSet<String>) -> Result<Vec<ReportEntry>> {
+    let worked: BTreeSet<&str> = entries.iter().filter(|e| e.context == Context::Work).map(|e| e.day.as_str()).collect();
+    let mut out = Vec::new();
+    for day in worked {
+        for (i, r) in rules.iter().enumerate().filter(|(_, r)| is_work_day(day, &[r.weekday]) && r.minutes > 0) {
+            let key = format!("{day}{RECURRING_KEY}{i}");
+            out.push(ReportEntry {
+                start_ts: crate::away::local_ms(day, &r.start)?,
+                duration_min: r.minutes,
+                measured_min: r.minutes,
+                project: None,
+                toggl_project: r.project.clone(),
+                client: r.client.clone(),
+                billable: r.billable,
+                skip: false,
+                context: Context::Work,
+                label: r.description.clone(),
+                description: r.description.clone(),
+                tags: vec![],
+                jira: None,
+                jira_info: None,
+                github: None,
+                github_info: None,
+                suggestion: None,
+                session_ids: vec![],
+                approved: true,
+                reasons: vec![],
+                sent: sent.contains(&key),
+                parallel_min: 0,
+                gap_min: 0,
+                pending_bridge_min: 0,
+                pieces: vec![],
+                day: day.to_string(),
+                key,
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// `windows` with the away spans cut out of them.
@@ -903,6 +956,17 @@ mod tests {
         assert_eq!(describe("api", None, "x"), "SHOP-1126 KTLO");
         assert_eq!(describe(crate::pipeline::WORK_MEETINGS, None, "Checkout Squad Daily"), "MEETING-1 Squad Meeting");
         assert_eq!(describe(crate::pipeline::WORK_MEETINGS, None, "1:1 with lead"), "MEETING-1 Internal Meeting");
+    }
+
+    #[test]
+    fn recurring_entries_land_on_worked_days_of_their_weekday() {
+        let rule = crate::settings::RecurringEntry { weekday: 0, start: "15:30".into(), minutes: 30, description: "Company Meeting".into(), project: "General".into(), client: "Acme Studio".into(), billable: false };
+        let worked = vec![entry("2026-10-26", "09:00", 60), entry("2026-10-27", "09:00", 60)];
+        let out = recurring_entries(&[rule], &worked, &BTreeSet::new()).unwrap();
+        assert_eq!(out.len(), 1, "Monday only");
+        assert_eq!((out[0].day.as_str(), out[0].start_ts, out[0].duration_min), ("2026-10-26", entry("2026-10-26", "15:30", 0).start_ts, 30));
+        assert!(out[0].approved && !out[0].billable);
+        assert!(recurring_entries(&[], &worked, &BTreeSet::new()).unwrap().is_empty());
     }
 
     #[test]
