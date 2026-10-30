@@ -13,7 +13,8 @@ pub struct Ticket {
     /// `SHOP-1261` or `insight-ui#128`.
     pub key: String,
     /// Where the strongest match came from: `branch`, `commit`, `agent`, `link`, `prompt`,
-    /// `meeting`, or `you`.
+    /// `meeting`, `you`, `tracker` (a "Find tickets" suggestion applied without a click), or
+    /// `pr` (the Jira ticket the session's pull request names).
     pub source: String,
 }
 
@@ -155,6 +156,32 @@ pub struct Detected {
     pub github: Option<Ticket>,
 }
 
+/// Every Jira-shaped key in `text`, once each, in order.
+pub fn jira_keys_in(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for c in jira_re().captures_iter(text) {
+        if !out.contains(&c[0].to_string()) {
+            out.push(c[0].to_string());
+        }
+    }
+    out
+}
+
+/// The Jira ticket a pull request is for: the one key its title names, else the one key its
+/// body names. Keys outside `prefixes` do not count; a title or body naming several keys, as a
+/// release PR does, names none.
+pub fn pr_jira_key(title: &str, body_keys: &[String], prefixes: &BTreeSet<String>) -> Option<String> {
+    let known = |keys: Vec<String>| keys.into_iter().filter(|k| k.split('-').next().is_some_and(|p| prefixes.contains(p))).collect::<Vec<_>>();
+    let only = |keys: Vec<String>| (keys.len() == 1).then(|| keys[0].clone());
+    let in_title = known(jira_keys_in(title));
+    if !in_title.is_empty() {
+        return only(in_title);
+    }
+    let mut in_body = known(body_keys.to_vec());
+    in_body.dedup();
+    only(in_body)
+}
+
 /// The first Jira key in `text` whose prefix is in `prefixes`.
 pub fn known_jira_key(text: &str, prefixes: &BTreeSet<String>) -> Option<String> {
     jira_re().captures_iter(text).map(|c| c[0].to_string()).find(|k| k.split('-').next().is_some_and(|p| prefixes.contains(p)))
@@ -250,6 +277,16 @@ fn agent_pr_weight(e: &WorkEvent, key: &str, project: Option<&str>) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pull_request_names_one_jira_ticket_in_its_title_else_its_body() {
+        let prefixes: BTreeSet<String> = ["SHOP".to_string(), "PLAT".to_string()].into();
+        let body = |k: &[&str]| k.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(pr_jira_key("fix(SHOP-1331): re-size savings", &body(&["SHOP-1262"]), &prefixes).as_deref(), Some("SHOP-1331"));
+        assert_eq!(pr_jira_key("fix(portal): price lines", &body(&["SHOP-1293"]), &prefixes).as_deref(), Some("SHOP-1293"));
+        assert_eq!(pr_jira_key("1.10.1", &body(&["PLAT-4603", "SHOP-1329"]), &prefixes), None, "a release PR names several");
+        assert_eq!(pr_jira_key("UTF-8 names", &[], &prefixes), None, "unknown prefixes do not count");
+    }
     use chrono::Utc;
 
     fn ev(k: &str, detail: &str, branch: Option<&str>) -> WorkEvent {

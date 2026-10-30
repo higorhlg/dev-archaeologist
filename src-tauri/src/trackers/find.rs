@@ -140,8 +140,8 @@ fn refresh_ticket_info(store: &Store, settings: &Settings, entries: &[ReportEntr
     let known = store.ticket_info()?;
     let slugs: HashMap<String, String> =
         repo_slugs(store)?.into_values().filter_map(|slug| Some((slug.rsplit('/').next()?.to_string(), slug))).collect();
-    let missing: BTreeSet<&str> =
-        entries.iter().filter_map(|e| e.github.as_ref()).map(|t| t.key.as_str()).filter(|k| !known.contains_key(*k)).collect();
+    let unread = |k: &str| known.get(k).is_none_or(|i| i.body_keys.is_none());
+    let missing: BTreeSet<&str> = entries.iter().filter_map(|e| e.github.as_ref()).map(|t| t.key.as_str()).filter(|k| unread(k)).collect();
     let mut found = Vec::new();
     for key in missing.into_iter().take(MAX_GITHUB_TITLES) {
         let Some((name, number)) = key.split_once('#') else { continue };
@@ -273,7 +273,7 @@ impl Suggester<'_> {
         let url = if self.jira_site.is_empty() { c.url.clone() } else { format!("https://{}/browse/{key}", self.jira_site) };
         let known = self.store.ticket_info()?.get(&key).is_some_and(|i| i.tracker == "jira");
         if !known {
-            self.store.save_ticket_info(&[TicketInfo { key: key.clone(), title: c.title.clone(), url, tracker: "jira".into(), epic: None }])?;
+            self.store.save_ticket_info(&[TicketInfo { key: key.clone(), title: c.title.clone(), url, tracker: "jira".into(), epic: None, body_keys: None }])?;
         }
         Ok(Some(key))
     }

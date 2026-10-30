@@ -146,6 +146,8 @@ pub struct Suggestion {
     pub by_ai: bool,
     /// Applied without a click; the entry's Jira ticket is this one.
     pub auto: bool,
+    /// The pull request the ticket came through, when a PR names it or Jira links the PR.
+    pub via: Option<String>,
 }
 
 /// Ticket titles and open suggestions, read once per report.
@@ -156,13 +158,13 @@ struct TicketLookups {
 
 impl TicketLookups {
     fn info_for(&self, key: &str) -> TicketInfo {
-        self.info.get(key).cloned().unwrap_or_else(|| TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: String::new(), epic: None })
+        self.info.get(key).cloned().unwrap_or_else(|| TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: String::new(), epic: None, body_keys: None })
     }
 
     /// The open suggestion for `key` in any of the sessions.
     fn suggestion_of(&self, session_ids: &[String], key: &str) -> Option<Suggestion> {
         let s = session_ids.iter().filter_map(|id| self.suggestions.get(id)).find(|s| s.ticket == key)?;
-        Some(Suggestion { info: self.info_for(&s.ticket), reason: s.reason.clone(), by_ai: s.by_ai, auto: s.auto })
+        Some(Suggestion { info: self.info_for(&s.ticket), reason: s.reason.clone(), by_ai: s.by_ai, auto: s.auto, via: s.via.clone() })
     }
 
     /// Some known ticket names `key` as its epic.
@@ -172,7 +174,7 @@ impl TicketLookups {
 
     fn suggestion_for(&self, session_ids: &[String]) -> Option<Suggestion> {
         let s = session_ids.iter().find_map(|id| self.suggestions.get(id))?;
-        Some(Suggestion { info: self.info_for(&s.ticket), reason: s.reason.clone(), by_ai: s.by_ai, auto: s.auto })
+        Some(Suggestion { info: self.info_for(&s.ticket), reason: s.reason.clone(), by_ai: s.by_ai, auto: s.auto, via: s.via.clone() })
     }
 }
 
@@ -249,6 +251,20 @@ fn resolve_tickets(session_id: &str, detected: tickets::Detected, choices: &Tick
     (jira, github)
 }
 
+/// The Jira ticket the pull request `key` is for, by `tickets::pr_jira_key`, as source `pr`.
+fn jira_of_pr(info: &HashMap<String, TicketInfo>, key: &str, prefixes: &BTreeSet<String>) -> Option<Ticket> {
+    let pr = info.get(key)?;
+    let jira = tickets::pr_jira_key(&pr.title, pr.body_keys.as_deref().unwrap_or_default(), prefixes)?;
+    Some(Ticket { key: jira, source: "pr".into() })
+}
+
+/// The session's open Jira suggestion that came through a pull request (a PR names the ticket,
+/// or Jira links the PR), as source `pr`. Word-match suggestions give none.
+fn suggested_through_pr(choices: &TicketChoices, session_id: &str) -> Option<Ticket> {
+    let s = choices.suggestions.get(session_id).filter(|s| s.via.is_some() && !tickets::is_github_key(&s.ticket))?;
+    Some(Ticket { key: s.ticket.clone(), source: "pr".into() })
+}
+
 fn parse_day(d: &str) -> Result<NaiveDate> {
     Ok(NaiveDate::parse_from_str(d, "%Y-%m-%d")?)
 }
@@ -265,11 +281,16 @@ fn load(store: &Store, q: &ReportQuery) -> Result<(Vec<Loaded>, BTreeSet<String>
     };
     let rules = Settings::load(store)?.contexts;
     let samples = store.project_sample_paths()?;
+    let info = store.ticket_info()?;
+    let pr_suggestions = Settings::load(store)?.toggl.descriptions.use_suggestions;
     let mut out: Vec<(Loaded, Vec<WorkEvent>)> = Vec::new();
     for session in store.sessions_between_days(&q.from, &q.to)? {
         let events = store.events_by_ids(&store.session_event_ids(&session.id)?)?;
         let detected = tickets::detect(&events, session.branch.as_deref(), session.project.as_deref(), &prefixes);
         let (jira, github) = resolve_tickets(&session.id, detected, &choices);
+        let jira = jira
+            .or_else(|| github.as_ref().and_then(|g| jira_of_pr(&info, &g.key, &prefixes)))
+            .or_else(|| pr_suggestions.then(|| suggested_through_pr(&choices, &session.id)).flatten());
         let context = rules.resolve(session.project.as_deref().unwrap_or(""), samples.get(session.project.as_deref().unwrap_or("")).map(String::as_str));
         out.push((Loaded { session, jira, github, report_min: 0, gap_min: 0, pending_min: 0, context }, events));
     }
@@ -385,21 +406,18 @@ struct EntryContext<'a> {
 struct Describe<'a> {
     project: Option<&'a str>,
     jira: Option<&'a Ticket>,
-    suggestion: Option<&'a Suggestion>,
     label: &'a str,
 }
 
 /// The Jira key an `epic_ticket` description files under: the entry's ticket when it is in the
-/// rules' Jira projects, else its open suggestion in them when the rules take suggestions.
-fn filed_jira_key(rules: &crate::settings::DescriptionRules, jira: Option<&Ticket>, suggestion: Option<&Suggestion>) -> Option<String> {
+/// rules' Jira projects.
+fn filed_jira_key(rules: &crate::settings::DescriptionRules, jira: Option<&Ticket>) -> Option<String> {
     let in_scope = |key: &str| !tickets::is_github_key(key) && (rules.jira_projects.is_empty() || rules.jira_projects.iter().any(|p| key.split('-').next() == Some(p.as_str())));
-    jira.map(|t| t.key.clone())
-        .filter(|k| in_scope(k))
-        .or_else(|| suggestion.filter(|_| rules.use_suggestions).map(|s| s.info.key.clone()).filter(|k| in_scope(k)))
+    jira.map(|t| t.key.clone()).filter(|k| in_scope(k))
 }
 
 fn epic_ticket_description(cx: &EntryContext, d: Describe) -> String {
-    let Describe { project, jira, suggestion, label } = d;
+    let Describe { project, jira, label } = d;
     let rules = &cx.settings.toggl.descriptions;
     let or_label = |text: &str| if text.is_empty() { label.to_string() } else { text.to_string() };
     if project == Some(crate::pipeline::WORK_MEETINGS) {
@@ -409,7 +427,7 @@ fn epic_ticket_description(cx: &EntryContext, d: Describe) -> String {
             None => or_label(&rules.other_meeting),
         };
     }
-    let Some(key) = filed_jira_key(rules, jira, suggestion) else { return or_label(&rules.no_ticket) };
+    let Some(key) = filed_jira_key(rules, jira) else { return or_label(&rules.no_ticket) };
     if cx.lookups.is_epic(&key) {
         return key;
     }
@@ -439,7 +457,7 @@ fn build_entry(key: String, group: Vec<&Loaded>, cx: &EntryContext) -> ReportEnt
     };
     let (description, tags) = match (jira.as_ref().or(github.as_ref()), q.tickets) {
         (_, TicketMode::EpicTicket) => {
-            let d = Describe { project: project.as_deref(), jira: jira.as_ref(), suggestion: suggestion.as_ref(), label: &label };
+            let d = Describe { project: project.as_deref(), jira: jira.as_ref(), label: &label };
             (epic_ticket_description(cx, d), vec![])
         }
         (Some(t), TicketMode::Prefix) => (format!("{} · {label}", t.key), vec![]),
@@ -853,7 +871,7 @@ mod tests {
     #[test]
     fn epic_ticket_descriptions_follow_the_rules() {
         let info = |key: &str, epic: Option<&str>| {
-            (key.to_string(), TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: "jira".into(), epic: epic.map(|e| crate::trackers::Epic { key: e.into(), title: String::new() }) })
+            (key.to_string(), TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: "jira".into(), epic: epic.map(|e| crate::trackers::Epic { key: e.into(), title: String::new() }), body_keys: None })
         };
         let lookups = TicketLookups { info: HashMap::from([info("SHOP-1331", Some("SHOP-1199")), info("SHOP-1385", None), info("SHOP-1200", Some("SHOP-1199"))]), suggestions: HashMap::new() };
         let mut settings = Settings::default();
@@ -869,15 +887,15 @@ mod tests {
         let sent = BTreeSet::new();
         let cx = EntryContext { q: &q, settings: &settings, sent: &sent, lookups: &lookups };
         let jira = |key: &str| Some(Ticket { key: key.into(), source: "branch".into() });
-        let describe = |project: &str, t: Option<Ticket>, label: &str| epic_ticket_description(&cx, Describe { project: Some(project), jira: t.as_ref(), suggestion: None, label });
+        let describe = |project: &str, t: Option<Ticket>, label: &str| epic_ticket_description(&cx, Describe { project: Some(project), jira: t.as_ref(), label });
         assert_eq!(describe("api", jira("SHOP-1331"), "x"), "SHOP-1199 SHOP-1331");
         assert_eq!(describe("api", jira("SHOP-1385"), "x"), "SHOP-1126 SHOP-1385", "no epic in Jira: the fallback epic");
         assert_eq!(describe("api", jira("SHOP-1199"), "x"), "SHOP-1199", "an epic stands alone");
         assert_eq!(describe("api", jira("PLAT-5507"), "x"), "SHOP-1126 KTLO", "a ticket outside the Jira projects counts as none");
-        let suggested = Suggestion { info: lookups.info["SHOP-1331"].clone(), reason: String::new(), by_ai: true, auto: false };
-        let plat = jira("PLAT-5507");
-        let d = Describe { project: Some("api"), jira: plat.as_ref(), suggestion: Some(&suggested), label: "x" };
-        assert_eq!(epic_ticket_description(&cx, d), "SHOP-1199 SHOP-1331", "an open suggestion comes before the no-ticket text");
+        let stored = |via: Option<&str>| StoredSuggestion { ticket: "SHOP-1331".into(), reason: String::new(), by_ai: false, via: via.map(String::from), auto: false };
+        let choices = TicketChoices { overrides: HashMap::new(), github_overrides: HashMap::new(), suggestions: HashMap::from([("pr".into(), stored(Some("api#339"))), ("words".into(), stored(None))]) };
+        assert_eq!(suggested_through_pr(&choices, "pr").map(|t| t.key).as_deref(), Some("SHOP-1331"));
+        assert_eq!(suggested_through_pr(&choices, "words"), None, "a word-match suggestion is not enough");
         assert_eq!(describe("api", None, "x"), "SHOP-1126 KTLO");
         assert_eq!(describe(crate::pipeline::WORK_MEETINGS, None, "Checkout Squad Daily"), "MEETING-1 Squad Meeting");
         assert_eq!(describe(crate::pipeline::WORK_MEETINGS, None, "1:1 with lead"), "MEETING-1 Internal Meeting");

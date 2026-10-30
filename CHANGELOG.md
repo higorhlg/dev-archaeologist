@@ -21,9 +21,13 @@ All notable changes to Dev Archaeologist. The format follows
 - Ticket mode "Epic and ticket" (`epic_ticket`) writes descriptions as `EPIC TICKET`, such as
   `SHOP-1199 SHOP-1331`, from the epic Jira gives the ticket. Rules in the Toggl settings name a
   fallback epic for tickets without one (in its own Jira project only), the description of an
-  entry with no ticket, meeting descriptions by title, the Jira projects that count, and whether
-  an open "Find tickets" suggestion fills an entry with no ticket. The timesheet page shows the
-  description above the work label and marks suggested tickets.
+  entry with no ticket, meeting descriptions by title, and the Jira projects that count. The
+  timesheet page shows the description above the work label.
+- A session with a GitHub pull request and no Jira ticket takes the Jira ticket the pull request
+  is for: the one key its title names, else the one key its body names. A release PR naming
+  several keys names none. Find tickets reads and keeps the body's keys for each pull request.
+- With `use_suggestions` on, a session with no Jira ticket takes its open suggestion that came
+  through a pull request (a PR names it, or Jira links the PR). Word-match suggestions never do.
 - `dev-arch report --tickets MODE` picks the ticket mode.
 - `dev-arch toggl recent [DAYS]` prints the time entries already in Toggl, read only.
 - `dev-arch away DAY [HH:MM HH:MM | clear]` records time away from work. Fitted days leave it

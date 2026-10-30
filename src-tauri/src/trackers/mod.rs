@@ -30,6 +30,8 @@ pub struct Candidate {
     pub last_ms: i64,
     /// The Jira epic the ticket belongs to.
     pub epic: Option<Epic>,
+    /// For a GitHub ticket, the Jira-shaped keys its body names. `None` when the body was not read.
+    pub body_keys: Option<Vec<String>>,
 }
 
 /// A Jira epic: the parent of a ticket one level up.
@@ -48,11 +50,14 @@ pub struct TicketInfo {
     pub tracker: String,
     #[serde(default)]
     pub epic: Option<Epic>,
+    /// For a GitHub ticket, the Jira-shaped keys its body names. `None` when the body was not read.
+    #[serde(default)]
+    pub body_keys: Option<Vec<String>>,
 }
 
 impl From<&Candidate> for TicketInfo {
     fn from(c: &Candidate) -> Self {
-        Self { key: c.key.clone(), title: c.title.clone(), url: c.url.clone(), tracker: c.tracker.clone(), epic: c.epic.clone() }
+        Self { key: c.key.clone(), title: c.title.clone(), url: c.url.clone(), tracker: c.tracker.clone(), epic: c.epic.clone(), body_keys: c.body_keys.clone() }
     }
 }
 

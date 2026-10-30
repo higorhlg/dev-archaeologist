@@ -92,6 +92,7 @@ fn to_candidate(site: &str, issue: &Value, range_end_ms: i64) -> Option<Candidat
         created_ms: parse_time(&f["created"]).unwrap_or(0),
         last_ms: parse_time(&f["updated"]).unwrap_or(range_end_ms).max(range_end_ms),
         epic: epic_of(&f["parent"]),
+        body_keys: None,
         key,
     })
 }
