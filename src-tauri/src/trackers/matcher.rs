@@ -223,7 +223,7 @@ mod tests {
     const DAY: i64 = 20 * DAY_MS;
 
     fn jira(key: &str, title: &str) -> Candidate {
-        Candidate { key: key.into(), title: title.into(), url: String::new(), tracker: "jira".into(), repo: None, created_ms: DAY - 5 * DAY_MS, last_ms: DAY + 10 * DAY_MS, epic: None, body_keys: None }
+        Candidate { key: key.into(), title: title.into(), url: String::new(), tracker: "jira".into(), repo: None, created_ms: DAY - 5 * DAY_MS, last_ms: DAY + 10 * DAY_MS, epic: None, body_keys: None, mine: None }
     }
 
     fn gh(key: &str, repo: &str, title: &str) -> Candidate {

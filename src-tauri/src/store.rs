@@ -14,12 +14,13 @@ use crate::trackers::{Epic, TicketInfo};
 const SCHEMA: &str = include_str!("../migrations/0001_init.sql");
 
 /// Columns added to tables that older databases created without them.
-const ADDED_COLUMNS: [(&str, &str, &str); 5] = [
+const ADDED_COLUMNS: [(&str, &str, &str); 6] = [
     ("ticket_suggestions", "via", "TEXT"),
     ("ticket_suggestions", "auto", "INTEGER NOT NULL DEFAULT 0"),
     ("ticket_info", "epic_key", "TEXT"),
     ("ticket_info", "epic_title", "TEXT"),
     ("ticket_info", "body_keys", "TEXT"),
+    ("ticket_info", "mine", "INTEGER"),
 ];
 
 /// Creates missing tables, then adds each column in `ADDED_COLUMNS` a table lacks.
@@ -444,11 +445,11 @@ impl Store {
     /// Titles, links and epics of tickets the trackers returned, keyed by ticket.
     pub fn ticket_info(&self) -> Result<std::collections::HashMap<String, TicketInfo>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT ticket, title, url, tracker, epic_key, epic_title, body_keys FROM ticket_info")?;
+        let mut stmt = conn.prepare("SELECT ticket, title, url, tracker, epic_key, epic_title, body_keys, mine FROM ticket_info")?;
         let rows = stmt.query_map([], |r| {
             let epic = r.get::<_, Option<String>>(4)?.map(|key| Epic { key, title: r.get::<_, Option<String>>(5).ok().flatten().unwrap_or_default() });
             let body_keys = r.get::<_, Option<String>>(6)?.map(|k| k.split(',').filter(|k| !k.is_empty()).map(String::from).collect());
-            Ok((r.get::<_, String>(0)?, TicketInfo { key: r.get(0)?, title: r.get(1)?, url: r.get(2)?, tracker: r.get(3)?, epic, body_keys }))
+            Ok((r.get::<_, String>(0)?, TicketInfo { key: r.get(0)?, title: r.get(1)?, url: r.get(2)?, tracker: r.get(3)?, epic, body_keys, mine: r.get(7)? }))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -461,9 +462,9 @@ impl Store {
             let (epic_key, epic_title) = t.epic.as_ref().map(|e| (e.key.as_str(), e.title.as_str())).unzip();
             let body_keys = t.body_keys.as_ref().map(|k| k.join(","));
             tx.execute(
-                "INSERT OR REPLACE INTO ticket_info (ticket, title, url, tracker, fetched_at, epic_key, epic_title, body_keys)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![t.key, t.title, t.url, t.tracker, now, epic_key, epic_title, body_keys],
+                "INSERT OR REPLACE INTO ticket_info (ticket, title, url, tracker, fetched_at, epic_key, epic_title, body_keys, mine)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![t.key, t.title, t.url, t.tracker, now, epic_key, epic_title, body_keys, t.mine],
             )?;
         }
         tx.commit()?;

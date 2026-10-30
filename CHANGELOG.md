@@ -33,6 +33,9 @@ All notable changes to Dev Archaeologist. The format follows
   use that epic before Jira's.
 - With `fold_no_ticket` on, `epic_ticket` work without a ticket goes to the ticketed work
   nearest it in time that day instead of taking the no-ticket text.
+- Jira tickets carry whether the user is their assignee or reporter. Projects listed in the
+  description rules' `mine_only_projects`, such as `PLAT`, file an entry under their ticket only
+  when it is the user's; any other of their tickets counts as no ticket.
 - Recurring entries in the Toggl settings, such as a weekly company meeting: a weekday, start
   time, length, description, Toggl project, client and billable flag. Reports add one to each
   worked day on that weekday, already approved; fitted days hold it at its time like a meeting

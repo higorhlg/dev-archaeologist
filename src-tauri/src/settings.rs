@@ -180,6 +180,9 @@ pub struct DescriptionRules {
     /// Jira project prefixes the time sheet files under, such as `SHOP`. A ticket from another
     /// project counts as no ticket. Empty takes every project.
     pub jira_projects: Vec<String>,
+    /// Jira project prefixes, such as `PLAT`, whose tickets count only when the user is their
+    /// assignee or reporter; any other ticket from them counts as no ticket.
+    pub mine_only_projects: Vec<String>,
     /// A session with no Jira ticket takes its open "Find tickets" suggestion that came through a
     /// pull request (a PR names it, or Jira links the PR). Word-match suggestions never count.
     pub use_suggestions: bool,

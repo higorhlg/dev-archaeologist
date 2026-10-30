@@ -69,6 +69,7 @@ fn to_candidate(item: &Value) -> Option<Candidate> {
         last_ms: last,
         epic: None,
         body_keys: Some(crate::tickets::jira_keys_in(item["body"].as_str().unwrap_or_default())),
+        mine: None,
     })
 }
 

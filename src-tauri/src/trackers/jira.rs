@@ -15,8 +15,9 @@ const TOKEN: KeychainItem = KeychainItem("jira-api-token");
 /// Where Atlassian users create API tokens. "Sign in" opens this page in the browser.
 pub const TOKEN_PAGE: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
 const MAX_PAGES: usize = 3;
-/// Issue fields every search asks for. `parent` carries the epic.
-const FIELDS: [&str; 4] = ["summary", "created", "updated", "parent"];
+/// Issue fields every search asks for. `parent` carries the epic; `assignee` and `reporter` say
+/// whether the ticket is the user's.
+const FIELDS: [&str; 6] = ["summary", "created", "updated", "parent", "assignee", "reporter"];
 const PAGE_SIZE: usize = 100;
 /// GitHub tickets looked up per run; each one is a Jira search.
 const MAX_LINK_LOOKUPS: usize = 25;
@@ -81,9 +82,17 @@ fn parse_time(v: &Value) -> Option<i64> {
     DateTime::parse_from_str(v.as_str()?, "%Y-%m-%dT%H:%M:%S%.f%z").ok().map(|t| t.timestamp_millis())
 }
 
-fn to_candidate(site: &str, issue: &Value, range_end_ms: i64) -> Option<Candidate> {
+/// The Jira account id of the user the token belongs to.
+fn my_account_id(site: &str, email: &str, token: &str) -> Result<String> {
+    let me = get(site, email, token, "/rest/api/3/myself")?;
+    me["accountId"].as_str().map(String::from).ok_or_else(|| anyhow!("Jira did not say who the token belongs to"))
+}
+
+/// @param me the user's Jira account id, from `my_account_id`.
+fn to_candidate(site: &str, issue: &Value, range_end_ms: i64, me: &str) -> Option<Candidate> {
     let key = issue["key"].as_str()?.to_string();
     let f = &issue["fields"];
+    let is_me = |person: &Value| person["accountId"].as_str() == Some(me);
     Some(Candidate {
         url: format!("https://{site}/browse/{key}"),
         title: f["summary"].as_str().unwrap_or_default().to_string(),
@@ -93,6 +102,7 @@ fn to_candidate(site: &str, issue: &Value, range_end_ms: i64) -> Option<Candidat
         last_ms: parse_time(&f["updated"]).unwrap_or(range_end_ms).max(range_end_ms),
         epic: epic_of(&f["parent"]),
         body_keys: None,
+        mine: Some(is_me(&f["assignee"]) || is_me(&f["reporter"])),
         key,
     })
 }
@@ -108,16 +118,18 @@ fn epic_of(parent: &Value) -> Option<Epic> {
     Some(Epic { key: parent["key"].as_str()?.to_string(), title: parent["fields"]["summary"].as_str().unwrap_or_default().to_string() })
 }
 
-/// Title, link and epic of each Jira key, in batches of `PAGE_SIZE`. Keys Jira does not know are left out.
+/// Title, link, epic and whether it is the user's, of each Jira key, in batches of `PAGE_SIZE`.
+/// Keys Jira does not know are left out.
 pub fn tickets_by_key(site: &str, email: &str, keys: &[String], range: &DayRange) -> Result<Vec<Candidate>> {
     let token = TOKEN.get().ok_or_else(|| anyhow!("Connect Jira in Sources first"))?;
+    let me = my_account_id(site, email, &token)?;
     let mut out = Vec::new();
     for batch in keys.chunks(PAGE_SIZE) {
         let jql = format!("key in ({})", batch.join(", "));
         let body = json!({"jql": jql, "fields": FIELDS, "maxResults": PAGE_SIZE});
         let page = post(site, email, &token, "/rest/api/3/search/jql", &body)?;
         let issues = page["issues"].as_array().cloned().unwrap_or_default();
-        out.extend(issues.iter().filter_map(|i| to_candidate(site, i, range.end_ms())));
+        out.extend(issues.iter().filter_map(|i| to_candidate(site, i, range.end_ms(), &me)));
     }
     Ok(out)
 }
@@ -125,6 +137,7 @@ pub fn tickets_by_key(site: &str, email: &str, keys: &[String], range: &DayRange
 /// The user's tickets for the range, newest first, up to three pages.
 pub fn search(site: &str, email: &str, range: &DayRange) -> Result<Vec<Candidate>> {
     let token = TOKEN.get().ok_or_else(|| anyhow!("Connect Jira in Sources first"))?;
+    let me = my_account_id(site, email, &token)?;
     let mut out = Vec::new();
     let mut next: Option<String> = None;
     for _ in 0..MAX_PAGES {
@@ -134,7 +147,7 @@ pub fn search(site: &str, email: &str, range: &DayRange) -> Result<Vec<Candidate
         }
         let page = post(site, email, &token, "/rest/api/3/search/jql", &body)?;
         let issues = page["issues"].as_array().cloned().unwrap_or_default();
-        out.extend(issues.iter().filter_map(|i| to_candidate(site, i, range.end_ms())));
+        out.extend(issues.iter().filter_map(|i| to_candidate(site, i, range.end_ms(), &me)));
         next = page["nextPageToken"].as_str().map(String::from);
         if next.is_none() || page["isLast"].as_bool() == Some(true) {
             break;
@@ -158,12 +171,13 @@ fn link_jql(key: &str) -> Option<String> {
 /// someone else owns it. Looks up at most `MAX_LINK_LOOKUPS` keys.
 pub fn tickets_linking(site: &str, email: &str, github_keys: &[String], range: &DayRange) -> Result<HashMap<String, Candidate>> {
     let token = TOKEN.get().ok_or_else(|| anyhow!("Connect Jira in Sources first"))?;
+    let me = my_account_id(site, email, &token)?;
     let mut out = HashMap::new();
     for key in github_keys.iter().take(MAX_LINK_LOOKUPS) {
         let Some(jql) = link_jql(key) else { continue };
         let body = json!({"jql": jql, "fields": FIELDS, "maxResults": 1});
         let page = post(site, email, &token, "/rest/api/3/search/jql", &body)?;
-        let first = page["issues"].as_array().and_then(|a| a.first()).and_then(|i| to_candidate(site, i, range.end_ms()));
+        let first = page["issues"].as_array().and_then(|a| a.first()).and_then(|i| to_candidate(site, i, range.end_ms(), &me));
         if let Some(c) = first {
             out.insert(key.clone(), c);
         }
@@ -221,10 +235,12 @@ mod tests {
 
     #[test]
     fn issue_json_becomes_a_candidate() {
-        let issue = json!({"key": "SHOP-12", "fields": {"summary": "Fix VAT", "created": "2026-10-01T09:00:00.000+0000", "updated": "2026-10-06T10:00:00.000+0100"}});
-        let c = to_candidate("acme.atlassian.net", &issue, 0).unwrap();
+        let issue = json!({"key": "SHOP-12", "fields": {"summary": "Fix VAT", "created": "2026-10-01T09:00:00.000+0000", "updated": "2026-10-06T10:00:00.000+0100", "assignee": {"accountId": "other"}, "reporter": {"accountId": "me"}}});
+        let c = to_candidate("acme.atlassian.net", &issue, 0, "me").unwrap();
         assert_eq!(c.url, "https://acme.atlassian.net/browse/SHOP-12");
         assert_eq!(c.title, "Fix VAT");
         assert!(c.created_ms > 0 && c.last_ms > c.created_ms);
+        assert_eq!(c.mine, Some(true), "the reporter is the user");
+        assert_eq!(to_candidate("acme.atlassian.net", &issue, 0, "someone").unwrap().mine, Some(false));
     }
 }

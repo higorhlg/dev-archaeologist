@@ -160,7 +160,7 @@ struct TicketLookups {
 
 impl TicketLookups {
     fn info_for(&self, key: &str) -> TicketInfo {
-        self.info.get(key).cloned().unwrap_or_else(|| TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: String::new(), epic: None, body_keys: None })
+        self.info.get(key).cloned().unwrap_or_else(|| TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: String::new(), epic: None, body_keys: None, mine: None })
     }
 
     /// The open suggestion for `key` in any of the sessions.
@@ -408,10 +408,13 @@ struct Describe<'a> {
 }
 
 /// The Jira key an `epic_ticket` description files under: the entry's ticket when it is in the
-/// rules' Jira projects.
-fn filed_jira_key(rules: &crate::settings::DescriptionRules, jira: Option<&Ticket>) -> Option<String> {
-    let in_scope = |key: &str| !tickets::is_github_key(key) && (rules.jira_projects.is_empty() || rules.jira_projects.iter().any(|p| key.split('-').next() == Some(p.as_str())));
-    jira.map(|t| t.key.clone()).filter(|k| in_scope(k))
+/// rules' Jira projects and, in a `mine_only_projects` project, Jira says the user is its
+/// assignee or reporter.
+fn filed_jira_key(rules: &crate::settings::DescriptionRules, lookups: &TicketLookups, jira: Option<&Ticket>) -> Option<String> {
+    let listed = |list: &[String], key: &str| list.iter().any(|p| key.split('-').next() == Some(p.as_str()));
+    let in_scope = |key: &str| !tickets::is_github_key(key) && (rules.jira_projects.is_empty() || listed(&rules.jira_projects, key));
+    let allowed = |key: &str| !listed(&rules.mine_only_projects, key) || lookups.info.get(key).and_then(|i| i.mine) == Some(true);
+    jira.map(|t| t.key.clone()).filter(|k| in_scope(k) && allowed(k))
 }
 
 /// The `epic_ticket` description: a meeting by its rule, a Jira ticket as "EPIC TICKET", else the
@@ -430,7 +433,7 @@ fn epic_ticket_description(cx: &EntryContext, d: Describe) -> String {
             None => or_label(&rules.other_meeting),
         };
     }
-    let Some(key) = filed_jira_key(rules, jira) else { return or_label(&rules.no_ticket) };
+    let Some(key) = filed_jira_key(rules, cx.lookups, jira) else { return or_label(&rules.no_ticket) };
     if let Some(epic) = cx.lookups.logged_epics.get(&key) {
         return format!("{epic} {key}");
     }
@@ -517,7 +520,7 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
         groups.into_iter().map(|(k, g)| build_entry(k, g, &cx)).filter(|e| e.duration_min > 0).collect();
     if q.tickets == TicketMode::EpicTicket && settings.toggl.descriptions.fold_no_ticket {
         let rules = &settings.toggl.descriptions;
-        fold_unticketed(&mut entries, |e| filed_jira_key(rules, e.jira.as_ref()).is_some());
+        fold_unticketed(&mut entries, |e| filed_jira_key(rules, &lookups, e.jira.as_ref()).is_some());
         entries.retain(|e| e.duration_min > 0);
     }
     if q.context.admits(Context::Work) {
@@ -1045,17 +1048,18 @@ mod tests {
     #[test]
     fn epic_ticket_descriptions_follow_the_rules() {
         let info = |key: &str, epic: Option<&str>| {
-            (key.to_string(), TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: "jira".into(), epic: epic.map(|e| crate::trackers::Epic { key: e.into(), title: String::new() }), body_keys: None })
+            (key.to_string(), TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: "jira".into(), epic: epic.map(|e| crate::trackers::Epic { key: e.into(), title: String::new() }), body_keys: None , mine: Some(key == "PLAT-7") })
         };
         let logged_epics = BTreeMap::from([("SHOP-1293".to_string(), "SHOP-1126".to_string())]);
-        let lookups = TicketLookups { info: HashMap::from([info("SHOP-1331", Some("SHOP-1199")), info("SHOP-1385", None), info("SHOP-1200", Some("SHOP-1199")), info("SHOP-1293", Some("SHOP-1199"))]), suggestions: HashMap::new(), logged_epics };
+        let lookups = TicketLookups { info: HashMap::from([info("SHOP-1331", Some("SHOP-1199")), info("SHOP-1385", None), info("SHOP-1200", Some("SHOP-1199")), info("SHOP-1293", Some("SHOP-1199")), info("PLAT-7", None), info("PLAT-8", None)]), suggestions: HashMap::new(), logged_epics };
         let mut settings = Settings::default();
         settings.toggl.descriptions = crate::settings::DescriptionRules {
             fallback_epic: "SHOP-1126".into(),
             no_ticket: "SHOP-1126 KTLO".into(),
             meetings: vec![crate::settings::MeetingDescription { title_contains: "squad".into(), description: "MEETING-1 Squad Meeting".into() }],
             other_meeting: "MEETING-1 Internal Meeting".into(),
-            jira_projects: vec!["SHOP".into()],
+            jira_projects: vec![],
+            mine_only_projects: vec!["PLAT".into()],
             use_suggestions: true,
             fold_no_ticket: true,
         };
@@ -1068,7 +1072,9 @@ mod tests {
         assert_eq!(describe("api", jira("SHOP-1385"), "x"), "SHOP-1126 SHOP-1385", "no epic in Jira: the fallback epic");
         assert_eq!(describe("api", jira("SHOP-1199"), "x"), "SHOP-1199", "an epic stands alone");
         assert_eq!(describe("api", jira("SHOP-1293"), "x"), "SHOP-1126 SHOP-1293", "the epic the user logs it under beats Jira's");
-        assert_eq!(describe("api", jira("PLAT-5507"), "x"), "SHOP-1126 KTLO", "a ticket outside the Jira projects counts as none");
+        assert_eq!(describe("api", jira("PLAT-8"), "x"), "SHOP-1126 KTLO", "a PLAT ticket that is not the user's counts as none");
+        assert_eq!(describe("api", jira("PLAT-5507"), "x"), "SHOP-1126 KTLO", "nor does one Jira has not described");
+        assert_eq!(describe("api", jira("PLAT-7"), "x"), "PLAT-7", "the user's own PLAT ticket counts");
         let stored = |via: Option<&str>| StoredSuggestion { ticket: "SHOP-1331".into(), reason: String::new(), by_ai: false, via: via.map(String::from), auto: false };
         let choices = TicketChoices { overrides: HashMap::new(), github_overrides: HashMap::new(), suggestions: HashMap::from([("pr".into(), stored(Some("api#339"))), ("words".into(), stored(None))]) };
         assert_eq!(suggested_through_pr(&choices, "pr").map(|t| t.key).as_deref(), Some("SHOP-1331"));

@@ -273,7 +273,7 @@ impl Suggester<'_> {
         let url = if self.jira_site.is_empty() { c.url.clone() } else { format!("https://{}/browse/{key}", self.jira_site) };
         let known = self.store.ticket_info()?.get(&key).is_some_and(|i| i.tracker == "jira");
         if !known {
-            self.store.save_ticket_info(&[TicketInfo { key: key.clone(), title: c.title.clone(), url, tracker: "jira".into(), epic: None, body_keys: None }])?;
+            self.store.save_ticket_info(&[TicketInfo { key: key.clone(), title: c.title.clone(), url, tracker: "jira".into(), epic: None, body_keys: None, mine: None }])?;
         }
         Ok(Some(key))
     }
