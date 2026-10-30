@@ -183,6 +183,9 @@ pub struct DescriptionRules {
     /// A session with no Jira ticket takes its open "Find tickets" suggestion that came through a
     /// pull request (a PR names it, or Jira links the PR). Word-match suggestions never count.
     pub use_suggestions: bool,
+    /// Work without a ticket goes to the ticketed work nearest it in time that day instead of
+    /// taking the no-ticket text; a day with no ticketed work keeps it.
+    pub fold_no_ticket: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

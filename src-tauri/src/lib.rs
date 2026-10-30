@@ -24,5 +24,6 @@ pub mod sync;
 pub mod tickets;
 pub mod timesheet_html;
 pub mod toggl;
+pub mod toggl_history;
 pub mod trackers;
 pub mod weekly;

@@ -28,6 +28,11 @@ All notable changes to Dev Archaeologist. The format follows
   several keys names none. Find tickets reads and keeps the body's keys for each pull request.
 - With `use_suggestions` on, a session with no Jira ticket takes its open suggestion that came
   through a pull request (a PR names it, or Jira links the PR). Word-match suggestions never do.
+- `dev-arch toggl learn DETAILED_REPORT.csv` reads a Toggl detailed-report export and keeps,
+  for each ticket, the epic it was logged under for the most time. `epic_ticket` descriptions
+  use that epic before Jira's.
+- With `fold_no_ticket` on, `epic_ticket` work without a ticket goes to the ticketed work
+  nearest it in time that day instead of taking the no-ticket text.
 - Recurring entries in the Toggl settings, such as a weekly company meeting: a weekday, start
   time, length, description, Toggl project, client and billable flag. Reports add one to each
   worked day on that weekday, already approved; fitted days hold it at its time like a meeting
@@ -43,13 +48,16 @@ All notable changes to Dev Archaeologist. The format follows
   usage text, so macOS can ask for access outside the app bundle.
 
 ### Changed
+- Fitted days are written in quarter hours: entries scale in 15-minute steps, an entry too short
+  to hold one folds into its nearest neighbour, split pieces land on whole steps, meetings snap
+  to the nearest quarter hours, and CSV start times drop their seconds.
 - "Fit days to N h" lays entries inside the day's presence windows (session spans joined over
   breaks up to 30 minutes). An entry that would start in a break waits for the next window
   while the windows left hold the rest of the day, so lunch and time away stay empty unless
   the day needs them.
 - Fitted days keep meetings at their calendar time and length, counted toward the day. Work
   that runs into a meeting splits into pieces before and after it; the CSV writes one row per
-  piece and Toggl gets one entry per piece. A piece shorter than 10 minutes moves the whole
+  piece and Toggl gets one entry per piece. A piece shorter than a quarter hour moves the whole
   entry past the meeting or away time instead.
 - The daily automation rewrites a journal written before its day ended, such as one made
   mid-day for a time sheet. Confirmed journals stay.

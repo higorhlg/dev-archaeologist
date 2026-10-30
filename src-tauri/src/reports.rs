@@ -150,10 +150,12 @@ pub struct Suggestion {
     pub via: Option<String>,
 }
 
-/// Ticket titles and open suggestions, read once per report.
+/// Ticket titles, open suggestions and the epics tickets are logged under, read once per report.
 struct TicketLookups {
     info: std::collections::HashMap<String, TicketInfo>,
     suggestions: std::collections::HashMap<String, StoredSuggestion>,
+    /// Ticket → epic from the user's imported Toggl history.
+    logged_epics: crate::toggl_history::LoggedEpics,
 }
 
 impl TicketLookups {
@@ -398,10 +400,6 @@ struct EntryContext<'a> {
     lookups: &'a TicketLookups,
 }
 
-/// The `epic_ticket` description: a meeting by its rule, a Jira ticket as "EPIC TICKET" (the
-/// fallback epic when Jira gives it none and the ticket is in the fallback epic's project, the
-/// key alone when it is an epic itself or has no epic to take), else the no-ticket text. The
-/// ticket is the one `filed_jira_key` picks. Each rule left empty falls back to the entry's label.
 /// What `epic_ticket_description` words.
 struct Describe<'a> {
     project: Option<&'a str>,
@@ -416,6 +414,11 @@ fn filed_jira_key(rules: &crate::settings::DescriptionRules, jira: Option<&Ticke
     jira.map(|t| t.key.clone()).filter(|k| in_scope(k))
 }
 
+/// The `epic_ticket` description: a meeting by its rule, a Jira ticket as "EPIC TICKET", else the
+/// no-ticket text. The ticket is the one `filed_jira_key` picks. Its epic is the one the user's
+/// Toggl history logs it under; else the key alone when it is an epic itself; else its Jira epic;
+/// else the fallback epic when the ticket is in the fallback epic's project; else the key alone.
+/// Each rule left empty falls back to the entry's label.
 fn epic_ticket_description(cx: &EntryContext, d: Describe) -> String {
     let Describe { project, jira, label } = d;
     let rules = &cx.settings.toggl.descriptions;
@@ -428,6 +431,9 @@ fn epic_ticket_description(cx: &EntryContext, d: Describe) -> String {
         };
     }
     let Some(key) = filed_jira_key(rules, jira) else { return or_label(&rules.no_ticket) };
+    if let Some(epic) = cx.lookups.logged_epics.get(&key) {
+        return format!("{epic} {key}");
+    }
     if cx.lookups.is_epic(&key) {
         return key;
     }
@@ -500,7 +506,8 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
     let settings = Settings::load(store)?;
     let (loaded, prefixes) = load(store, q)?;
     let sent = store.toggl_sent_keys()?;
-    let lookups = TicketLookups { info: store.ticket_info()?, suggestions: store.ticket_suggestions()? };
+    let logged_epics = crate::toggl_history::load(store)?;
+    let lookups = TicketLookups { info: store.ticket_info()?, suggestions: store.ticket_suggestions()?, logged_epics };
     let cx = EntryContext { q, settings: &settings, sent: &sent, lookups: &lookups };
     let mut groups: BTreeMap<String, Vec<&Loaded>> = BTreeMap::new();
     for l in &loaded {
@@ -508,6 +515,11 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
     }
     let mut entries: Vec<ReportEntry> =
         groups.into_iter().map(|(k, g)| build_entry(k, g, &cx)).filter(|e| e.duration_min > 0).collect();
+    if q.tickets == TicketMode::EpicTicket && settings.toggl.descriptions.fold_no_ticket {
+        let rules = &settings.toggl.descriptions;
+        fold_unticketed(&mut entries, |e| filed_jira_key(rules, e.jira.as_ref()).is_some());
+        entries.retain(|e| e.duration_min > 0);
+    }
     if q.context.admits(Context::Work) {
         let recurring = recurring_entries(&settings.toggl.recurring, &entries, &sent)?;
         entries.extend(recurring);
@@ -524,6 +536,7 @@ pub fn build(store: &Store, q: &ReportQuery) -> Result<Report> {
         }
         let plan = FitPlan { target, day_targets: &day_targets, work_days: &work_days, windows: &windows, meetings: &meetings, away: &away };
         fit_days(&mut entries, &plan);
+        entries.retain(|e| e.duration_min > 0);
         entries.sort_by_key(|e| e.start_ts);
     }
 
@@ -630,12 +643,86 @@ fn without_away(mut windows: BTreeMap<String, Vec<(i64, i64)>>, away: &BTreeMap<
     windows
 }
 
-/// The calendar spans of work meetings, by the report entry that holds them.
+/// Moves entry `from`'s time, sessions and review state into entry `into`, which starts at the
+/// earlier of the two. `from` is left with no time.
+fn absorb(entries: &mut [ReportEntry], into: usize, from: usize) {
+    let f = entries[from].clone();
+    entries[from].duration_min = 0;
+    let t = &mut entries[into];
+    t.start_ts = t.start_ts.min(f.start_ts);
+    t.duration_min += f.duration_min;
+    t.measured_min += f.measured_min;
+    t.gap_min += f.gap_min;
+    t.pending_bridge_min += f.pending_bridge_min;
+    t.parallel_min += f.parallel_min;
+    t.approved &= f.approved;
+    t.session_ids.extend(f.session_ids);
+    for r in f.reasons {
+        if !t.reasons.contains(&r) {
+            t.reasons.push(r);
+        }
+    }
+}
+
+/// How far `at` lies from entry `e`'s span; zero inside it.
+fn ms_apart(e: &ReportEntry, at: i64) -> i64 {
+    let end = e.start_ts + e.duration_min * 60_000;
+    (e.start_ts - at).max(at - end).max(0)
+}
+
+/// Work entries without a ticket hand their time to the ticketed work entry nearest them in time
+/// on the same day, as a person files loose work under the ticket they were on. Meetings, sent
+/// and "never send" entries neither give nor take; a day with no ticketed entry keeps its time.
+/// Folded entries are left with no time.
+/// @param ticketed whether an entry is filed under a ticket.
+fn fold_unticketed(entries: &mut [ReportEntry], ticketed: impl Fn(&ReportEntry) -> bool) {
+    let movable = |e: &ReportEntry| e.context == Context::Work && !e.sent && !e.skip && e.project.as_deref() != Some(crate::pipeline::WORK_MEETINGS);
+    let takers: Vec<usize> = (0..entries.len()).filter(|&i| movable(&entries[i]) && ticketed(&entries[i])).collect();
+    let givers: Vec<usize> = (0..entries.len()).filter(|&i| movable(&entries[i]) && !ticketed(&entries[i])).collect();
+    for from in givers {
+        let (day, at) = (&entries[from].day, entries[from].start_ts);
+        let nearest = takers.iter().copied().filter(|&j| &entries[j].day == day).min_by_key(|&j| ms_apart(&entries[j], at));
+        if let Some(into) = nearest {
+            absorb(entries, into, from);
+        }
+    }
+}
+
+/// Folds the shortest of `open` whose share of `total` minutes is under `ENTRY_STEP_MIN` into the
+/// open entry nearest it in time, again until every share holds a step or one entry is left, as
+/// a person writes no entry shorter than a quarter hour.
+/// @returns the entries of `open` that still hold time.
+fn fold_short(entries: &mut [ReportEntry], open: &[usize], total: i64) -> Vec<usize> {
+    let mut open = open.to_vec();
+    loop {
+        let sum: i64 = open.iter().map(|&i| entries[i].duration_min).sum();
+        if open.len() < 2 || sum <= 0 {
+            return open;
+        }
+        let short = (0..open.len()).filter(|&p| entries[open[p]].duration_min * total < ENTRY_STEP_MIN * sum).min_by_key(|&p| entries[open[p]].duration_min);
+        let Some(pos) = short else { return open };
+        let from = open.remove(pos);
+        let at = entries[from].start_ts;
+        let into = *open.iter().min_by_key(|&&j| ms_apart(&entries[j], at)).unwrap();
+        absorb(entries, into, from);
+    }
+}
+
+/// `ms` moved to the nearest quarter hour.
+fn to_quarter_hour(ms: i64) -> i64 {
+    let step = ENTRY_STEP_MIN * 60_000;
+    (ms + step / 2).div_euclid(step) * step
+}
+
+/// The calendar spans of work meetings, by the report entry that holds them, moved to the nearest
+/// quarter hours as a person logs a meeting. Each span keeps at least a quarter hour.
 /// @returns entry key → sorted `(start_ms, end_ms)` meeting spans.
 fn meeting_blocks(loaded: &[Loaded], grouping: Grouping) -> HashMap<String, Vec<(i64, i64)>> {
     let mut out: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
     for l in loaded.iter().filter(|l| l.session.state != "excluded" && l.session.project.as_deref() == Some(crate::pipeline::WORK_MEETINGS)) {
-        out.entry(group_key(l, grouping)).or_default().push((l.session.start_ts, l.session.end_ts));
+        let start = to_quarter_hour(l.session.start_ts);
+        let end = to_quarter_hour(l.session.end_ts).max(start + ENTRY_STEP_MIN * 60_000);
+        out.entry(group_key(l, grouping)).or_default().push((start, end));
     }
     out.values_mut().for_each(|spans| spans.sort());
     out
@@ -658,8 +745,10 @@ struct FitPlan<'a> {
 }
 
 /// Fits each work day to its `plan.day_targets` minutes, else `plan.target`. Meeting entries take their calendar time and
-/// length and count toward the day. The other entries scale in proportion to fill the rest, in
-/// 5-minute steps when the rest allows, then are laid out without overlap inside the day's
+/// length and count toward the day. The other entries fill the rest: those too short to hold a
+/// quarter hour fold into their neighbours (see `fold_short`, which leaves them with no time), the
+/// others scale in proportion, in quarter hours when the rest allows (see `scale_to`), then are
+/// laid out without overlap inside the day's
 /// presence windows and around its meetings and away time (see `lay_in_windows`). Entries mapped to "never
 /// send" keep their time and do not count. Entries already sent to Toggl keep their time and
 /// count toward the day. Days off the work days (Monday to Friday without a schedule) and days
@@ -680,9 +769,14 @@ fn fit_days(entries: &mut [ReportEntry], plan: &FitPlan) {
         let mut busy: Vec<(i64, i64)> = idx.iter().filter_map(|&i| meeting_of(&entries[i])).flatten().copied().collect();
         busy.sort();
         let open: Vec<usize> = idx.iter().copied().filter(|&i| !entries[i].sent && meeting_of(&entries[i]).is_none()).collect();
-        let measured: Vec<i64> = open.iter().map(|&i| entries[i].duration_min).collect();
         let meeting_min: i64 = busy.iter().map(|(s, e)| (e - s) / 60_000).sum();
-        let Some(fitted) = scale_to(&measured, target - sent - meeting_min) else { continue };
+        let rest = target - sent - meeting_min;
+        if rest <= 0 || open.is_empty() {
+            continue;
+        }
+        let open = fold_short(entries, &open, rest);
+        let measured: Vec<i64> = open.iter().map(|&i| entries[i].duration_min).collect();
+        let Some(fitted) = scale_to(&measured, rest) else { continue };
         busy.extend(plan.away.get(&day).into_iter().flatten().copied());
         busy.sort();
         for &i in &idx {
@@ -736,15 +830,16 @@ fn pin_to_calendar(e: &mut ReportEntry, spans: &[(i64, i64)]) {
     e.pieces = if pieces.len() > 1 { pieces } else { vec![] };
 }
 
-/// `parts` scaled to sum to `total`, in 5-minute steps when `total` is a multiple of 5 (else
-/// 1-minute steps), by largest remainder, with every non-zero part kept above zero when there
-/// are enough steps. `None` when there is nothing to scale or `total` is not positive.
+/// `parts` scaled to sum to `total`, in `ENTRY_STEP_MIN` steps when `total` is a multiple of
+/// it, else 5-minute steps when a multiple of 5, else 1-minute steps, by largest remainder, with
+/// every non-zero part kept above zero when there are enough steps. `None` when there is nothing
+/// to scale or `total` is not positive.
 fn scale_to(parts: &[i64], total: i64) -> Option<Vec<i64>> {
     let sum: i64 = parts.iter().sum();
     if sum <= 0 || total <= 0 {
         return None;
     }
-    let unit = if total % 5 == 0 { 5 } else { 1 };
+    let unit = [ENTRY_STEP_MIN, 5, 1].into_iter().find(|u| total % u == 0).unwrap();
     let steps = total / unit;
     let exact: Vec<f64> = parts.iter().map(|&p| p as f64 * steps as f64 / sum as f64).collect();
     let mut out: Vec<i64> = exact.iter().map(|x| x.floor() as i64).collect();
@@ -769,9 +864,10 @@ fn scale_to(parts: &[i64], total: i64) -> Option<Vec<i64>> {
 /// Moves each of `idx` (in start order) to start no earlier than the previous one ends. An entry
 /// that would start in a break between `windows` waits for the next window while the free
 /// window time left still holds every remaining minute, so breaks stay empty unless the day
-/// needs them. Entries never overlap `busy` spans: one that runs into a meeting splits into
-/// pieces before and after it, unless a piece would be shorter than `MIN_PIECE_MIN`; then the
-/// whole entry starts after that span. Without windows, entries run back to back.
+/// needs them. An entry that runs into a `busy` span splits into pieces before and after it,
+/// unless a piece would be shorter than `ENTRY_STEP_MIN`; then the whole entry starts after that
+/// span. Split pieces are then moved to whole steps (see `in_steps`), so a piece may end a few
+/// minutes into or before the span. Without windows, entries run back to back.
 /// @param busy sorted meeting spans the entries flow around.
 fn lay_in_windows(entries: &mut [ReportEntry], idx: &[usize], windows: &[(i64, i64)], busy: &[(i64, i64)]) {
     let mut order = idx.to_vec();
@@ -787,10 +883,11 @@ fn lay_in_windows(entries: &mut [ReportEntry], idx: &[usize], windows: &[(i64, i
             }
         }
         let mut pieces = split_around(busy, start, entries[i].duration_min);
-        if pieces.len() > 1 && pieces.iter().any(|p| p.duration_min < MIN_PIECE_MIN) {
+        if pieces.len() > 1 && pieces.iter().any(|p| p.duration_min < ENTRY_STEP_MIN) {
             start = pieces[1].start_ts;
             pieces = split_around(busy, start, entries[i].duration_min);
         }
+        let pieces = in_steps(pieces);
         let last = pieces.last().copied().unwrap_or(Piece { start_ts: start, duration_min: 0 });
         cursor = last.start_ts + last.duration_min * 60_000;
         entries[i].start_ts = start;
@@ -799,8 +896,28 @@ fn lay_in_windows(entries: &mut [ReportEntry], idx: &[usize], windows: &[(i64, i
     }
 }
 
-/// A split piece shorter than this moves its entry past the span that split it.
-const MIN_PIECE_MIN: i64 = 10;
+/// Fitted entries and pieces are written in steps of this many minutes, as a person fills a
+/// time sheet in quarter hours; a split piece shorter than one moves its entry past the span
+/// that split it.
+const ENTRY_STEP_MIN: i64 = 15;
+
+/// `pieces` with each one but the last moved to the nearest whole `ENTRY_STEP_MIN` (at least one,
+/// and leaving a step for each later piece) and the last taking what is left, so they add up as
+/// before. Every piece keeps its start.
+fn in_steps(mut pieces: Vec<Piece>) -> Vec<Piece> {
+    let mut left: i64 = pieces.iter().map(|p| p.duration_min).sum();
+    let n = pieces.len();
+    for (k, p) in pieces.iter_mut().enumerate() {
+        let room = left - ENTRY_STEP_MIN * (n - 1 - k) as i64;
+        if k + 1 == n {
+            p.duration_min = left;
+        } else if room >= ENTRY_STEP_MIN {
+            p.duration_min = ((p.duration_min + ENTRY_STEP_MIN / 2) / ENTRY_STEP_MIN * ENTRY_STEP_MIN).clamp(ENTRY_STEP_MIN, room);
+        }
+        left -= p.duration_min;
+    }
+    pieces
+}
 
 /// `at`, or the end of the `busy` spans it falls inside.
 fn after_busy(busy: &[(i64, i64)], at: i64) -> i64 {
@@ -876,7 +993,7 @@ pub fn to_csv<'a>(entries: impl Iterator<Item = &'a ReportEntry>, email: &str) -
             e.description.clone(),
             if e.billable { "Yes".into() } else { "No".into() },
             start.format("%Y-%m-%d").to_string(),
-            start.format("%H:%M:%S").to_string(),
+            start.format("%H:%M:00").to_string(),
             format!("{:02}:{:02}:00", piece.duration_min / 60, piece.duration_min % 60),
             e.tags.join(", "),
         ];
@@ -930,7 +1047,8 @@ mod tests {
         let info = |key: &str, epic: Option<&str>| {
             (key.to_string(), TicketInfo { key: key.into(), title: String::new(), url: String::new(), tracker: "jira".into(), epic: epic.map(|e| crate::trackers::Epic { key: e.into(), title: String::new() }), body_keys: None })
         };
-        let lookups = TicketLookups { info: HashMap::from([info("SHOP-1331", Some("SHOP-1199")), info("SHOP-1385", None), info("SHOP-1200", Some("SHOP-1199"))]), suggestions: HashMap::new() };
+        let logged_epics = BTreeMap::from([("SHOP-1293".to_string(), "SHOP-1126".to_string())]);
+        let lookups = TicketLookups { info: HashMap::from([info("SHOP-1331", Some("SHOP-1199")), info("SHOP-1385", None), info("SHOP-1200", Some("SHOP-1199")), info("SHOP-1293", Some("SHOP-1199"))]), suggestions: HashMap::new(), logged_epics };
         let mut settings = Settings::default();
         settings.toggl.descriptions = crate::settings::DescriptionRules {
             fallback_epic: "SHOP-1126".into(),
@@ -939,6 +1057,7 @@ mod tests {
             other_meeting: "MEETING-1 Internal Meeting".into(),
             jira_projects: vec!["SHOP".into()],
             use_suggestions: true,
+            fold_no_ticket: true,
         };
         let q = ReportQuery { from: String::new(), to: String::new(), grouping: Grouping::TicketDay, tickets: TicketMode::EpicTicket, context: ContextFilter::Work, fit_day_min: None, fit_drift_min: None };
         let sent = BTreeSet::new();
@@ -948,6 +1067,7 @@ mod tests {
         assert_eq!(describe("api", jira("SHOP-1331"), "x"), "SHOP-1199 SHOP-1331");
         assert_eq!(describe("api", jira("SHOP-1385"), "x"), "SHOP-1126 SHOP-1385", "no epic in Jira: the fallback epic");
         assert_eq!(describe("api", jira("SHOP-1199"), "x"), "SHOP-1199", "an epic stands alone");
+        assert_eq!(describe("api", jira("SHOP-1293"), "x"), "SHOP-1126 SHOP-1293", "the epic the user logs it under beats Jira's");
         assert_eq!(describe("api", jira("PLAT-5507"), "x"), "SHOP-1126 KTLO", "a ticket outside the Jira projects counts as none");
         let stored = |via: Option<&str>| StoredSuggestion { ticket: "SHOP-1331".into(), reason: String::new(), by_ai: false, via: via.map(String::from), auto: false };
         let choices = TicketChoices { overrides: HashMap::new(), github_overrides: HashMap::new(), suggestions: HashMap::from([("pr".into(), stored(Some("api#339"))), ("words".into(), stored(None))]) };
@@ -1005,10 +1125,11 @@ mod tests {
     }
 
     #[test]
-    fn scales_parts_to_an_exact_total_in_five_minute_steps() {
-        assert_eq!(scale_to(&[60, 30, 10], 480), Some(vec![290, 145, 45]));
+    fn scales_parts_to_an_exact_total_in_quarter_hours_when_it_can() {
+        assert_eq!(scale_to(&[60, 30, 10], 480), Some(vec![285, 150, 45]));
         assert_eq!(scale_to(&[200, 1], 480).unwrap().iter().sum::<i64>(), 480);
-        assert_eq!(scale_to(&[200, 1], 480).unwrap()[1], 5, "a short entry keeps a step");
+        assert_eq!(scale_to(&[200, 1], 480).unwrap()[1], 15, "a short entry keeps a step");
+        assert_eq!(scale_to(&[60, 30, 10], 485), Some(vec![290, 145, 50]), "5-minute steps when quarters cannot add up");
         assert_eq!(scale_to(&[50, 50], 457), Some(vec![229, 228]));
         assert_eq!(scale_to(&[0, 0], 480), None);
     }
@@ -1024,8 +1145,8 @@ mod tests {
         ];
         entries[3].sent = true;
         fit_days(&mut entries, &plan(480, &BTreeMap::new(), &HashMap::new()));
-        assert_eq!((entries[0].duration_min, entries[1].duration_min), (320, 160));
-        assert_eq!(entries[1].start_ts, entries[0].start_ts + 320 * 60_000, "laid back to back");
+        assert_eq!((entries[0].duration_min, entries[1].duration_min), (315, 165));
+        assert_eq!(entries[1].start_ts, entries[0].start_ts + 315 * 60_000, "laid back to back");
         assert_eq!(entries[2].duration_min, 25, "Saturday keeps its measured time");
         assert_eq!((entries[3].duration_min, entries[4].duration_min), (60, 420), "sent time counts and stays");
         assert_eq!(entries[0].measured_min, 120);
@@ -1048,6 +1169,48 @@ mod tests {
         let mut short = day();
         fit_days(&mut short, &plan(540, &windows, &HashMap::new()));
         assert_eq!(short[1].start_ts, short[0].start_ts + short[0].duration_min * 60_000, "a day longer than its windows fills the break");
+    }
+
+    #[test]
+    fn slivers_fold_into_their_neighbours_and_pieces_land_on_quarter_hours() {
+        let at = |t: &str| entry("2026-10-28", t, 0).start_ts;
+        let windows = BTreeMap::from([("2026-10-28".to_string(), vec![(at("09:00"), at("18:00"))])]);
+        let mut entries = vec![entry("2026-10-28", "09:00", 100), entry("2026-10-28", "10:40", 3), entry("2026-10-28", "10:43", 47), entry("2026-10-28", "11:30", 30)];
+        entries[1].session_ids = vec!["sliver".into()];
+        let meetings = HashMap::from([(entries[3].key.clone(), vec![(at("11:30"), at("12:00"))])]);
+        fit_days(&mut entries, &plan(480, &windows, &meetings));
+        assert_eq!(entries[1].duration_min, 0, "three minutes cannot hold a quarter hour");
+        assert!(entries[0].session_ids.contains(&"sliver".to_string()), "the nearest entry took its sessions");
+        assert_eq!(entries[0].duration_min + entries[2].duration_min, 450);
+        for p in entries.iter().flat_map(|e| e.blocks()) {
+            assert_eq!(p.duration_min % 15, 0, "{p:?}");
+        }
+    }
+
+    #[test]
+    fn steps_keep_the_total_and_every_start() {
+        let p = |start_ts: i64, duration_min: i64| Piece { start_ts, duration_min };
+        assert_eq!(in_steps(vec![p(0, 22), p(10, 23)]), vec![p(0, 15), p(10, 30)]);
+        assert_eq!(in_steps(vec![p(0, 38), p(10, 22)]), vec![p(0, 45), p(10, 15)]);
+        assert_eq!(in_steps(vec![p(0, 50)]), vec![p(0, 50)], "a single piece is left alone");
+        assert_eq!(to_quarter_hour(entry("2026-10-26", "11:25", 0).start_ts), entry("2026-10-26", "11:30", 0).start_ts);
+    }
+
+    #[test]
+    fn unticketed_work_folds_into_the_nearest_ticketed_work_that_day() {
+        let ticket = |e: &mut ReportEntry, key: &str| e.jira = Some(Ticket { key: key.into(), source: "branch".into() });
+        let mut entries = vec![
+            entry("2026-10-27", "09:00", 60),
+            entry("2026-10-27", "10:00", 20),
+            entry("2026-10-27", "15:00", 60),
+            entry("2026-10-28", "09:00", 40),
+            entry("2026-10-27", "10:10", 30),
+        ];
+        ticket(&mut entries[0], "SHOP-1");
+        ticket(&mut entries[2], "SHOP-2");
+        entries[4].project = Some(crate::pipeline::WORK_MEETINGS.into());
+        fold_unticketed(&mut entries, |e| e.jira.is_some());
+        assert_eq!(entries.iter().map(|e| e.duration_min).collect::<Vec<_>>(), vec![80, 0, 60, 40, 30], "a day with no ticket and meetings keep their time");
     }
 
     fn choices(auto: bool) -> TicketChoices {

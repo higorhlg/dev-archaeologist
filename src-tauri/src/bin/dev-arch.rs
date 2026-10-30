@@ -277,7 +277,15 @@ fn main() -> Result<()> {
                     println!("  {} {:>6}m  {:<24} {}", &e.start[..16.min(e.start.len())], e.duration.max(0) / 60, project, e.description.unwrap_or_default());
                 }
             }
-            _ => bail!("usage: dev-arch toggl recent [DAYS]"),
+            Some("learn") => {
+                let path = args.get(3).ok_or_else(|| anyhow::anyhow!("usage: dev-arch toggl learn DETAILED_REPORT.csv"))?;
+                let epics = devarch::toggl_history::import(&p.store, &std::fs::read_to_string(path)?)?;
+                println!("learned the epic of {} tickets from {path}", epics.len());
+                for (ticket, epic) in epics.iter().rev().take(8) {
+                    println!("  {ticket} → {epic}");
+                }
+            }
+            _ => bail!("usage: dev-arch toggl recent [DAYS] | toggl learn DETAILED_REPORT.csv"),
         },
         Some("calendar") => {
             let n = match args.get(2).map(String::as_str) {
