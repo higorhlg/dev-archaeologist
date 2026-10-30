@@ -12,7 +12,7 @@ All notable changes to Dev Archaeologist. The format follows
   write entries still waiting for approval), and prints each entry's laid-out times and the
   measured time beside the fitted one.
 - `dev-arch report --fit HOURS --drift MIN` lets each fitted day move up to about MIN minutes
-  from HOURS, toward how long that day's presence ran against the other days, in 5-minute
+  from HOURS, toward how long that day's presence ran against the other days, in quarter-hour
   steps. The days together still add up to HOURS each. `ReportQuery.fit_drift_min` carries it.
 - `dev-arch report --html [PATH]` writes the report as a readable page laid out like a time
   tracker's list view: a week total with a bar per day, time per project, and per day a

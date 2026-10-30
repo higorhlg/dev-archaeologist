@@ -649,9 +649,12 @@ fn is_work_day(day: &str, work_days: &[u32]) -> bool {
     NaiveDate::parse_from_str(day, "%Y-%m-%d").is_ok_and(|d| work_days.contains(&d.weekday().num_days_from_monday()))
 }
 
+/// Drifted day totals move in quarter hours.
+const DAY_STEP_MIN: i64 = 15;
+
 /// Each work day's fitted minutes when days may drift: `target` moved toward how long the day's
-/// presence ran against the mean of the work days, by about `drift` minutes at most, in 5-minute
-/// steps. The days together still add up to `target` each. Empty when `drift` is not positive.
+/// presence ran against the mean of the work days, by about `drift` minutes at most, in
+/// `DAY_STEP_MIN` steps, as a person writes day totals. The days together still add up to `target` each. Empty when `drift` is not positive.
 /// @param windows day → presence windows from `presence_windows`.
 fn drifted_targets(windows: &BTreeMap<String, Vec<(i64, i64)>>, target: i64, drift: i64, work_days: &[u32]) -> BTreeMap<String, i64> {
     let presence: Vec<(&String, i64)> = windows
@@ -665,7 +668,8 @@ fn drifted_targets(windows: &BTreeMap<String, Vec<(i64, i64)>>, target: i64, dri
     let mean = presence.iter().map(|(_, p)| *p as f64).sum::<f64>() / presence.len() as f64;
     let offsets: Vec<f64> = presence.iter().map(|(_, p)| (*p as f64 - mean).clamp(-drift as f64, drift as f64)).collect();
     let shift = offsets.iter().sum::<f64>() / offsets.len() as f64;
-    let mut steps: Vec<i64> = offsets.iter().map(|o| ((o - shift) / 5.0).round() as i64 * 5).collect();
+    let step = DAY_STEP_MIN as f64;
+    let mut steps: Vec<i64> = offsets.iter().map(|o| (((o - shift) / step).round() * step) as i64).collect();
     let longest = (0..presence.len()).max_by_key(|&i| presence[i].1).unwrap();
     steps[longest] -= steps.iter().sum::<i64>();
     presence.iter().zip(steps).map(|((day, _), step)| ((*day).clone(), target + step)).collect()
@@ -932,7 +936,7 @@ mod tests {
         assert_eq!(t.len(), 3, "Saturday is not a work day");
         assert_eq!(t.values().sum::<i64>(), 3 * 480);
         assert!(t["2026-10-27"] > 480 && t["2026-10-28"] < 480, "{t:?}");
-        assert!(t.values().all(|m| (m - 480).abs() <= 40 && m % 5 == 0), "{t:?}");
+        assert!(t.values().all(|m| (m - 480).abs() <= 45 && m % 15 == 0), "{t:?}");
         assert!(drifted_targets(&windows, 480, 0, &[0, 1, 2, 3, 4]).is_empty());
     }
 
