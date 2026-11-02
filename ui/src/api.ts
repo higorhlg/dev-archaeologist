@@ -22,6 +22,20 @@ export type Session = {
 export type Achievement = { id: string; day: string; rule: string; title: string; detail: string; evidence_id: string };
 export type JournalLine = { text: string; cites: string[] };
 export type Journal = { day: string; lines: JournalLine[]; state: "inferred" | "confirmed"; model: string | null };
+export type StatusKind = "daily" | "weekly";
+/** A status update for a meeting on `period`; `covers` are the days its done lines cover. */
+export type StatusView = {
+  kind: StatusKind;
+  period: string;
+  covers: string[];
+  done: JournalLine[];
+  now: JournalLine[];
+  blockers: JournalLine[];
+  model: string | null;
+  written_ms: number;
+  /** The update as plain text, ready to paste into a chat. */
+  text: string;
+};
 
 export type Gap = {
   id: string;
@@ -260,6 +274,8 @@ export const api = {
   editSession: (id: string, edit: SessionEdit) => invoke<void>("edit_session", { id, edit }),
   generateJournal: (day: string) => invoke<Journal>("generate_journal", { day }),
   confirmJournal: (day: string) => invoke<void>("confirm_journal", { day }),
+  statusUpdate: (kind: StatusKind, day: string) => invoke<StatusView | null>("status_update", { kind, day }),
+  generateStatusUpdate: (kind: StatusKind, day: string) => invoke<StatusView>("generate_status_update", { kind, day }),
   rebuildDay: (day: string) => invoke<number>("rebuild_day", { day }),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
   /** Saves only the given sections, merged into the stored settings. */

@@ -69,6 +69,23 @@ pub struct Journal {
     pub model: Option<String>,
 }
 
+/// A status update for a meeting: what got done, what is in progress and what is in the way.
+/// Every line cites the events behind it, like journal lines.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusUpdate {
+    /// `daily` (a standup on `period`) or `weekly` (the ISO week starting on `period`).
+    pub kind: String,
+    pub period: String,
+    /// The days the done lines cover, oldest first.
+    pub covers: Vec<String>,
+    pub done: Vec<JournalLine>,
+    pub now: Vec<JournalLine>,
+    pub blockers: Vec<JournalLine>,
+    pub model: Option<String>,
+    /// When it was written, in unix ms.
+    pub written_ms: i64,
+}
+
 /// A ticket "Find tickets" proposed for a session, waiting for the user.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredSuggestion {
@@ -403,6 +420,42 @@ impl Store {
                     model: r.get(3)?,
                 })
             })
+            .optional()?)
+    }
+
+    /// Replaces the status update of its kind for its period.
+    pub fn save_status_update(&self, u: &StatusUpdate) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let body = serde_json::json!({ "covers": u.covers, "done": u.done, "now": u.now, "blockers": u.blockers });
+        conn.execute(
+            "INSERT OR REPLACE INTO status_updates VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![u.kind, u.period, body.to_string(), u.model, Utc::now().timestamp_millis()],
+        )?;
+        Ok(())
+    }
+
+    /// The status update of `kind` (`daily` or `weekly`) for `period` (meeting day or Monday).
+    pub fn status_update(&self, kind: &str, period: &str) -> Result<Option<StatusUpdate>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT kind, period, body, model, created_at FROM status_updates WHERE kind = ?1 AND period = ?2",
+                [kind, period],
+                |r| {
+                    let body: serde_json::Value = serde_json::from_str(&r.get::<_, String>(2)?).unwrap_or_default();
+                    let lines = |k: &str| serde_json::from_value(body[k].clone()).unwrap_or_default();
+                    Ok(StatusUpdate {
+                        kind: r.get(0)?,
+                        period: r.get(1)?,
+                        covers: serde_json::from_value(body["covers"].clone()).unwrap_or_default(),
+                        done: lines("done"),
+                        now: lines("now"),
+                        blockers: lines("blockers"),
+                        model: r.get(3)?,
+                        written_ms: r.get(4)?,
+                    })
+                },
+            )
             .optional()?)
     }
 

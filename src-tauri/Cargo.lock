@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "dev-archaeologist"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "block2",

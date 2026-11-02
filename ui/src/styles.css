@@ -178,6 +178,13 @@ button.icon { width: 28px; height: 28px; padding: 0; font-size: 16px; line-heigh
 .entry sup { font-size: 10px; color: var(--focus); margin-left: 2px; font-weight: 650; cursor: help; }
 .entry footer { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--rule-soft); padding-top: 14px; margin-top: 6px; font-size: 12.5px; }
 .finds h2 { font-size: 15px; margin-bottom: 10px; }
+.status-update { margin-bottom: 8px; }
+.status-update > h2 { font-size: 15px; margin-bottom: 2px; }
+.status-update > p.muted { font-size: 12.5px; margin-bottom: 10px; }
+.status-update h3 { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-2); margin: 0 0 6px; }
+.status-update ul { margin: 0 0 16px; padding-left: 18px; }
+.status-update li { font-size: 15px; line-height: 1.55; margin-bottom: 6px; }
+.status-update .entry > p.muted { margin-bottom: 16px; }
 .empty { background: var(--surface); border: 1px dashed var(--rule); border-radius: 10px; padding: 22px; display: grid; gap: 12px; justify-items: start; color: var(--ink-2); margin-bottom: 18px; }
 
 /* ---------- projects ---------- */

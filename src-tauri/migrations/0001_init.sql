@@ -112,3 +112,12 @@ CREATE TABLE IF NOT EXISTS ticket_info (
   epic_key   TEXT,                        -- the Jira epic the ticket belongs to
   epic_title TEXT
 );
+
+CREATE TABLE IF NOT EXISTS status_updates (
+  kind       TEXT NOT NULL CHECK (kind IN ('daily','weekly')),
+  period     TEXT NOT NULL,               -- daily: the meeting day; weekly: the week's Monday
+  body       TEXT NOT NULL,               -- JSON: { covers: [day], done, now, blockers: [{ text, cites }] }
+  model      TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (kind, period)
+);

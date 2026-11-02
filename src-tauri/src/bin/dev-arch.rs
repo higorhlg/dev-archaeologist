@@ -4,6 +4,10 @@
 //!   dev-arch backfill [days]     read past logs into the local store
 //!   dev-arch day [YYYY-MM-DD]    print one day's sessions and achievements
 //!   dev-arch journal YYYY-MM-DD  write the day's journal with the Claude API
+//!   dev-arch standup [YYYY-MM-DD]      write the standup for a meeting that day: the last day
+//!                                      worked, what is in progress, blockers
+//!   dev-arch week-status [YYYY-MM-DD]  write the weekly status for a meeting that day: the week
+//!                                      before it, what is in progress, blockers
 //!   dev-arch report FROM TO [session|ticket_day|project_day] [work|personal|all]
 //!                [--tickets prefix|tag|off|epic_ticket] [--fit HOURS [--drift MIN]]
 //!                [--csv [PATH]] [--html [PATH]] [--include-unapproved]
@@ -194,6 +198,10 @@ fn main() -> Result<()> {
             api::generate_journal(&p, &day)?;
             print_day(&p, &day)?;
         }
+        Some(cmd @ ("standup" | "week-status")) => {
+            let kind = if cmd == "standup" { "daily" } else { "weekly" };
+            println!("{}", api::generate_status_update(&p, kind, &arg_day(&args))?.text);
+        }
         Some("report") => print_report(&p, &args)?,
         Some("find-tickets") => {
             let today = Local::now().format("%Y-%m-%d").to_string();
@@ -350,7 +358,7 @@ fn main() -> Result<()> {
             println!("API key saved to the Keychain");
         }
         Some("hook") => println!("Add this line to ~/.zshrc:\n  {}", api::install_shell_hook()?),
-        _ => bail!("usage: dev-arch discover|backfill|day|rebuild|journal|report|find-tickets|away|toggl|calendar|sync|sync-agent|weekly|status|daemon|set-key|hook"),
+        _ => bail!("usage: dev-arch discover|backfill|day|rebuild|journal|standup|week-status|report|find-tickets|away|toggl|calendar|sync|sync-agent|weekly|status|daemon|set-key|hook"),
     }
     Ok(())
 }

@@ -135,7 +135,7 @@ pub fn measure_day(day: &str, windows: &[(i64, i64)], observed_min: i64, gaps: &
 }
 
 /// Work or personal, for each session's project.
-fn session_context(rules: &ContextRules, samples: &HashMap<String, String>, s: &Session) -> Context {
+pub(crate) fn session_context(rules: &ContextRules, samples: &HashMap<String, String>, s: &Session) -> Context {
     let project = s.project.as_deref().unwrap_or_default();
     rules.resolve(project, samples.get(project).map(String::as_str))
 }
@@ -262,6 +262,32 @@ pub fn confirm_journal(p: &Pipeline, day: &str) -> Result<()> {
     let mut j = p.store.journal(day)?.ok_or_else(|| anyhow!("no journal for {day}"))?;
     j.state = "confirmed".into();
     p.store.save_journal(&j)
+}
+
+/// A status update with its text, ready to paste into a chat.
+#[derive(Debug, Serialize)]
+pub struct StatusView {
+    #[serde(flatten)]
+    pub update: crate::store::StatusUpdate,
+    pub text: String,
+}
+
+fn status_view(update: crate::store::StatusUpdate) -> StatusView {
+    let text = crate::infer::status_update::to_text(&update);
+    StatusView { update, text }
+}
+
+/// The kept status update of `kind` (`daily` or `weekly`) for the meeting on `day`, if any.
+pub fn status_update(p: &Pipeline, kind: &str, day: &str) -> Result<Option<StatusView>> {
+    crate::infer::status_update::StatusKind::parse(kind)?;
+    Ok(p.store.status_update(kind, day)?.map(status_view))
+}
+
+/// Writes the status update of `kind` for the meeting on `day` with the Claude API.
+pub fn generate_status_update(p: &Pipeline, kind: &str, day: &str) -> Result<StatusView> {
+    let kind = crate::infer::status_update::StatusKind::parse(kind)?;
+    let meeting = NaiveDate::parse_from_str(day, "%Y-%m-%d")?;
+    Ok(status_view(crate::infer::status_update::generate(&p.store, kind, meeting)?))
 }
 
 pub fn rebuild_day(p: &Pipeline, day: &str) -> Result<usize> {

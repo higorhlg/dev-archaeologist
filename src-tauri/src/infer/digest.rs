@@ -85,12 +85,17 @@ fn hhmm(ms: i64) -> String {
 /// A session carries a ticket only when the user set or accepted one, or "Find tickets" applied
 /// one on its own (`auto`), which the user can still take back.
 pub fn build(store: &Store, day: &str, opt_out: &[String]) -> anyhow::Result<SessionDigest> {
+    build_where(store, day, opt_out, |_| true)
+}
+
+/// `build`, keeping only the sessions `keep` admits.
+pub fn build_where(store: &Store, day: &str, opt_out: &[String], keep: impl Fn(&Session) -> bool) -> anyhow::Result<SessionDigest> {
     let confirmed = store.ticket_overrides()?;
     let auto = store.ticket_suggestions()?;
     let info = store.ticket_info()?;
     let mut sessions = Vec::new();
     for s in store.sessions_for_day(day)? {
-        if s.state == "excluded" || s.project.as_ref().is_some_and(|p| opt_out.contains(p)) {
+        if s.state == "excluded" || s.project.as_ref().is_some_and(|p| opt_out.contains(p)) || !keep(&s) {
             continue;
         }
         let events = store.events_by_ids(&store.session_event_ids(&s.id)?)?;

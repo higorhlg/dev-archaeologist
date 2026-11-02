@@ -7,7 +7,16 @@ All notable changes to Dev Archaeologist. The format follows
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-02
+
 ### Added
+- The Journal has a Daily standup and a Weekly status for a meeting on the day shown, written by the
+  Claude API from work sessions only, as short topic lines (`SHOP-1323 checkout savings callout - review
+  fixes`) under done, now and blockers. The standup covers the last day worked before the meeting
+  (Friday for a Monday), the weekly status the seven days before it; both add what the meeting day
+  holds so far. Blockers come only from evidence such as a prompt about waiting on a review. Every
+  line cites its events; "Copy as text" copies the update for a chat. Updates are kept per meeting
+  day in `status_updates`. `dev-arch standup [DAY]` and `dev-arch week-status [DAY]` write and print them.
 - A sidebar groups the app by purpose: Hours for Toggl (with a count of entries to approve), then
   Day, Journal and Projects, with the work/personal switch and Settings at the bottom.
 - The timesheet (formerly Reports) moves through periods with arrows (today, a week or a month),
