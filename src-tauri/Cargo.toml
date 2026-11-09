@@ -2,6 +2,9 @@
 name = "dev-archaeologist"
 version = "0.12.0"
 edition = "2021"
+description = "Rebuilds what you worked on from the evidence your tools already keep"
+license = "MIT"
+repository = "https://github.com/higorhlg/dev-archaeologist"
 default-run = "dev-archaeologist"
 
 [lib]

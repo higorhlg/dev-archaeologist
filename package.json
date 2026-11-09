@@ -2,6 +2,8 @@
   "name": "dev-archaeologist",
   "private": true,
   "version": "0.12.0",
+  "description": "Rebuilds what you worked on from the evidence your tools already keep",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

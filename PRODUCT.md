@@ -34,7 +34,7 @@ tags, time ranges and totals.
 
 - SaaS analytics dashboards: hero metrics, card grids, gradients.
 - One long settings page mixing connections, rules and preferences.
-- Screens that pile every control on top of the content (the current Reports screen).
+- Screens that pile every control on top of the content.
 - Anything that hides why an entry got its ticket or its time.
 
 ## Design Principles
