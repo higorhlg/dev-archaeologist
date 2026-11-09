@@ -152,7 +152,8 @@ export type Settings = {
   automation: Automation;
 };
 
-export type Automation = { journals: boolean; weekly_report: boolean };
+/** What runs once a day without a click. `weekly_status_day` is the weekly meeting's weekday, 0 = Monday. */
+export type Automation = { journals: boolean; weekly_report: boolean; status_updates: boolean; weekly_status_day: number };
 export type TrackerSettings = { jira_site: string; jira_email: string; github: boolean; auto_sync_min: number };
 export type TrackerStatus = {
   jira_site: string;
@@ -276,6 +277,8 @@ export const api = {
   confirmJournal: (day: string) => invoke<void>("confirm_journal", { day }),
   statusUpdate: (kind: StatusKind, day: string) => invoke<StatusView | null>("status_update", { kind, day }),
   generateStatusUpdate: (kind: StatusKind, day: string) => invoke<StatusView>("generate_status_update", { kind, day }),
+  /** The kept status update for the meeting on `day`, written first when there is none. */
+  ensureStatusUpdate: (kind: StatusKind, day: string) => invoke<StatusView>("ensure_status_update", { kind, day }),
   rebuildDay: (day: string) => invoke<number>("rebuild_day", { day }),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
   /** Saves only the given sections, merged into the stored settings. */
@@ -345,6 +348,13 @@ export function dayKey(d: Date): string {
 export function shiftDay(day: string, delta: number): string {
   const [y, m, d] = day.split("-").map(Number);
   return dayKey(new Date(y, m - 1, d + delta));
+}
+
+/** The latest day that falls on `weekday` (0 = Monday), today included. */
+export function latestWeekday(weekday: number): string {
+  const today = new Date();
+  const daysBack = (today.getDay() + 6 - weekday + 7) % 7;
+  return shiftDay(dayKey(today), -daysBack);
 }
 
 export function hhmm(ms: number): string {

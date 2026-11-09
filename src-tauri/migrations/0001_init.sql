@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS ticket_info (
 
 CREATE TABLE IF NOT EXISTS status_updates (
   kind       TEXT NOT NULL CHECK (kind IN ('daily','weekly')),
-  period     TEXT NOT NULL,               -- daily: the meeting day; weekly: the week's Monday
+  period     TEXT NOT NULL,               -- the day of the meeting the update is for
   body       TEXT NOT NULL,               -- JSON: { covers: [day], done, now, blockers: [{ text, cites }] }
   model      TEXT,
   created_at INTEGER NOT NULL,

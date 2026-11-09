@@ -290,6 +290,14 @@ pub fn generate_status_update(p: &Pipeline, kind: &str, day: &str) -> Result<Sta
     Ok(status_view(crate::infer::status_update::generate(&p.store, kind, meeting)?))
 }
 
+/// The kept status update of `kind` for the meeting on `day`, written with the Claude API when
+/// there is none.
+pub fn ensure_status_update(p: &Pipeline, kind: &str, day: &str) -> Result<StatusView> {
+    let kind = crate::infer::status_update::StatusKind::parse(kind)?;
+    let meeting = NaiveDate::parse_from_str(day, "%Y-%m-%d")?;
+    Ok(status_view(crate::infer::status_update::ensure(&p.store, kind, meeting)?))
+}
+
 pub fn rebuild_day(p: &Pipeline, day: &str) -> Result<usize> {
     p.rebuild_day(NaiveDate::parse_from_str(day, "%Y-%m-%d")?)
 }

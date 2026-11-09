@@ -7,6 +7,7 @@
 //! Both are keyed by the meeting day. Every line cites the events behind it.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{Duration, NaiveDate, Utc};
@@ -232,6 +233,20 @@ pub fn generate(store: &Store, kind: StatusKind, meeting: NaiveDate) -> Result<S
     Ok(update)
 }
 
+/// Held while `ensure` reads and writes, so two callers in this process never write the same update.
+static ENSURING: Mutex<()> = Mutex::new(());
+
+/// The kept status update of `kind` for the meeting on `meeting`, written with one API call when
+/// there is none. Callers in this process take turns, so the daily run and an opened Scrum page
+/// asking for the same update cost one call.
+pub fn ensure(store: &Store, kind: StatusKind, meeting: NaiveDate) -> Result<StatusUpdate> {
+    let _turn = ENSURING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    match store.status_update(kind.as_str(), &ymd(meeting))? {
+        Some(kept) => Ok(kept),
+        None => generate(store, kind, meeting),
+    }
+}
+
 /// `Fri 30 Oct` for `2026-10-30`; the text itself when it is not a date.
 fn short_day(day: &str) -> String {
     NaiveDate::parse_from_str(day, "%Y-%m-%d").map(|d| d.format("%a %-d %b").to_string()).unwrap_or_else(|_| day.to_string())
@@ -294,6 +309,15 @@ mod tests {
         let text = to_text(&update("weekly", "2026-11-02", &["2026-10-26", "2026-10-30"]));
         assert!(text.starts_with("Past week (Mon 26 Oct to Fri 30 Oct):"));
         assert!(text.contains("Working on now:\n- SHOP-2"));
+    }
+
+    #[test]
+    fn ensure_returns_the_kept_update_without_writing_again() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_status_update(&update("daily", "2026-11-03", &["2026-11-02"])).unwrap();
+        let kept = ensure(&store, StatusKind::Daily, NaiveDate::from_ymd_opt(2026, 11, 3).unwrap()).unwrap();
+        assert_eq!(kept.done[0].text, "SHOP-1: shipped the fix");
+        assert_eq!(kept.model, None, "a written update names its model");
     }
 
     #[test]

@@ -325,7 +325,7 @@ fn main() -> Result<()> {
                 }
             }
             if let Some(run) = devarch::sync::run_daily(&p)? {
-                println!("daily: journals {:?} · weekly report {}", run.journals, run.weekly_report.as_deref().unwrap_or("-"));
+                println!("daily: journals {:?} · status updates {:?} · weekly report {}", run.journals, run.status_updates, run.weekly_report.as_deref().unwrap_or("-"));
                 for e in &run.errors {
                     println!("  error: {e}");
                 }

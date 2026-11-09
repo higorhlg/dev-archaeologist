@@ -62,7 +62,7 @@ fn write_loop(pipeline: Pipeline, rx: Receiver<WorkEvent>) {
 /// Once a minute: reads new agent log lines, new commits and meetings that just ended,
 /// then rebuilds every day since the last poll. The first pass catches up on what happened
 /// while the app was closed. Then syncs tickets when the interval in Sources has passed, and
-/// once a day writes missing journals and last week's report.
+/// once a day writes missing journals, the status updates due that day and last week's report.
 fn poll_loop(pipeline: Pipeline) {
     let mut tail = AgentTail::default();
     loop {

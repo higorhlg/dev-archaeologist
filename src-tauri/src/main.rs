@@ -87,6 +87,12 @@ async fn generate_status_update(p: State<'_, Pipeline>, kind: String, day: Strin
 }
 
 #[tauri::command]
+async fn ensure_status_update(p: State<'_, Pipeline>, kind: String, day: String) -> CmdResult<api::StatusView> {
+    let p = p.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || api::ensure_status_update(&p, &kind, &day)).await.map_err(|e| e.to_string())?.map_err(err)
+}
+
+#[tauri::command]
 fn rebuild_day(p: State<Pipeline>, day: String) -> CmdResult<usize> {
     api::rebuild_day(&p, &day).map_err(err)
 }
@@ -320,7 +326,7 @@ fn main() {
         .manage(pipeline)
         .invoke_handler(tauri::generate_handler![
             status, discover, backfill, day, session_events, projects, confirm_session, exclude_session,
-            edit_session, generate_journal, confirm_journal, status_update, generate_status_update, rebuild_day, save_settings, save_api_key,
+            edit_session, generate_journal, confirm_journal, status_update, generate_status_update, ensure_status_update, rebuild_day, save_settings, save_api_key,
             install_shell_hook, report, approve_sessions, approve_confident, set_entry_label, set_ticket, set_github_ref,
             export_toggl_csv, connect_toggl, toggl_projects, send_to_toggl, days_needing_labels, ai_models, report_days, resolve_gap,
             approve_bridges, fill_to_schedule, save_schedule, project_contexts, set_project_context, patch_settings, detect_contexts,

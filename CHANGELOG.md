@@ -7,6 +7,21 @@ All notable changes to Dev Archaeologist. The format follows
 
 ## [Unreleased]
 
+### Added
+- A Scrum group in the sidebar with a Daily standup page and a Weekly status page. Each opens on
+  its current meeting day (today, or the latest weekly meeting day) and steps a day or a week at
+  a time.
+- Status updates write themselves: the daily run writes the standup on each work day and the
+  weekly status on its meeting weekday, and a Scrum page writes its current meeting day's update
+  when it opens without one. "Write the daily standup each work day, and the weekly status each
+  …" in Settings, AI and automation, turns this on or off and picks the weekday
+  (`Automation.status_updates`, `Automation.weekly_status_day`, Monday by default).
+  `dev-arch sync` lists the status updates in its daily line.
+
+### Changed
+- The Daily standup and Weekly status moved from the Journal to their Scrum pages, which show
+  when each was written.
+
 ## [0.12.0] - 2026-11-02
 
 ### Added

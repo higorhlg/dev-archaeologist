@@ -7,8 +7,9 @@ import ProjectTimeline from "./ProjectTimeline";
 import Settings, { type SettingsTab } from "./Settings";
 import Timesheet from "./Timesheet";
 import ScheduleStep from "./ScheduleStep";
+import Scrum from "./Scrum";
 
-type View = "timesheet" | "day" | "journal" | "projects" | "settings";
+type View = "timesheet" | "standup" | "weekly" | "day" | "journal" | "projects" | "settings";
 
 const SIDES: { id: ContextFilter; label: string }[] = [
   { id: "work", label: "Work" },
@@ -19,6 +20,8 @@ const SIDES: { id: ContextFilter; label: string }[] = [
 /** 16px line icons for the sidebar, drawn on a 16-unit grid. */
 const ICONS: Record<View, ReactElement> = {
   timesheet: <path d="M3 3.5h10M3 8h10M3 12.5h6M11.5 10.5v4M9.5 12.5h4" />,
+  standup: <path d="M2.5 3.5h11v7H8l-3 2.5v-2.5H2.5z" />,
+  weekly: <><rect x="3.5" y="2.5" width="9" height="11.5" rx="1.5" /><path d="M6 6h4M6 8.5h4M6 11h2.5" /></>,
   day: <><rect x="2.5" y="3" width="11" height="10.5" rx="1.5" /><path d="M2.5 6.5h11M5.5 1.5v3M10.5 1.5v3" /></>,
   journal: <><path d="M4 2.5h7.5a1 1 0 0 1 1 1v10H4a1.5 1.5 0 0 1 0-3h8.5" /><path d="M6 5.5h4" /></>,
   projects: <path d="M2.5 13.5h11M4 11V8M7 11V4M10 11V6.5M13 11V9" />,
@@ -27,6 +30,7 @@ const ICONS: Record<View, ReactElement> = {
 
 const GROUPS: { title: string; items: { id: View; label: string }[] }[] = [
   { title: "Timesheet", items: [{ id: "timesheet", label: "Hours for Toggl" }] },
+  { title: "Scrum", items: [{ id: "standup", label: "Daily standup" }, { id: "weekly", label: "Weekly status" }] },
   { title: "Activity", items: [{ id: "day", label: "Day" }, { id: "journal", label: "Journal" }, { id: "projects", label: "Projects" }] },
 ];
 
@@ -105,6 +109,9 @@ export default function App() {
       <main className="main">
         {view === "timesheet" && (
           <Timesheet status={status} side={side} onSaved={refresh} onOpenDay={openDay} goToSettings={goToSettings} onReviewCount={setReviewCount} />
+        )}
+        {(view === "standup" || view === "weekly") && (
+          <Scrum key={view} kind={view === "standup" ? "daily" : "weekly"} hasKey={status.has_api_key} automation={status.settings.automation} goToAi={() => goToSettings("ai")} />
         )}
         {view === "day" && <Timeline day={day} setDay={setDay} days={status.days} side={side} />}
         {view === "journal" && <Journal day={day} setDay={setDay} hasKey={status.has_api_key} goToSources={() => goToSettings("ai")} />}

@@ -23,7 +23,7 @@ cd src-tauri && cargo build --bin dev-arch
 ./target/debug/dev-arch journal 2026-10-06
 ./target/debug/dev-arch standup 2026-11-02      # standup for a meeting that day: done, now, blockers
 ./target/debug/dev-arch week-status 2026-11-02  # weekly status: the week before that day, now, blockers
-./target/debug/dev-arch sync            # catch up, sync tickets, run the daily journal and weekly report
+./target/debug/dev-arch sync            # catch up, sync tickets, run the daily journal, status updates and weekly report
 ./target/debug/dev-arch sync-agent install 30   # run `sync` every 30 min while the app is closed
 ./target/debug/dev-arch weekly 2026-10-19       # write that week's report to reports/2026-W43.md
 ./target/debug/dev-arch hook            # install the zsh hook file

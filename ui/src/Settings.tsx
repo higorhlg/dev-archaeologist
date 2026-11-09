@@ -464,6 +464,14 @@ function AiAndAutomation({ status, onSaved }: { status: Status; onSaved: () => v
           <input type="checkbox" checked={automation.weekly_report} onChange={(e) => setAutomation({ ...automation, weekly_report: e.target.checked })} />
           Write last week's work report on Monday, as a Markdown file
         </label>
+        <label className="check-line">
+          <input type="checkbox" checked={automation.status_updates} onChange={(e) => setAutomation({ ...automation, status_updates: e.target.checked })} />
+          Write the daily standup each work day, and the weekly status each
+          <select value={automation.weekly_status_day} aria-label="Weekly status day" onChange={(e) => setAutomation({ ...automation, weekly_status_day: Number(e.target.value) })}>
+            {WEEKDAYS.map((d, n) => <option key={d} value={n}>{d}</option>)}
+          </select>
+          (needs the API key)
+        </label>
         <div className="actions">
           <button className="primary" onClick={save}>Save</button>
           <button onClick={() => api.openWeeklyReports()}>Open weekly reports</button>

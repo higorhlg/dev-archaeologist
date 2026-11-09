@@ -48,11 +48,16 @@ pub struct Automation {
     pub journals: bool,
     /// Write last week's work report as Markdown once the week is over.
     pub weekly_report: bool,
+    /// Write the daily standup on each work day and the weekly status on `weekly_status_day`,
+    /// and write the current one when its Scrum page opens without it. Needs an API key.
+    pub status_updates: bool,
+    /// The weekday of the weekly status meeting, 0 = Monday … 6 = Sunday.
+    pub weekly_status_day: u32,
 }
 
 impl Default for Automation {
     fn default() -> Self {
-        Self { journals: true, weekly_report: true }
+        Self { journals: true, weekly_report: true, status_updates: true, weekly_status_day: 0 }
     }
 }
 

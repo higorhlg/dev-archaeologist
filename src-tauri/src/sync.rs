@@ -1,9 +1,10 @@
 //! Work that runs without a click: the ticket sync, while the app runs and from `dev-arch sync`.
 
 use anyhow::Result;
-use chrono::{Duration, Local, Utc};
+use chrono::{Datelike, Duration, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::infer::status_update::{self, StatusKind};
 use crate::reports::{ContextFilter, Grouping, ReportQuery, TicketMode};
 use crate::settings::Settings;
 use crate::store::Store;
@@ -161,6 +162,21 @@ mod tests {
         assert!(p.contains("/tmp/a&amp;b.db"));
         assert!(agent_plist("/x", 1, None, "/l").contains("<integer>300</integer>"), "at most every 5 minutes");
     }
+
+    #[test]
+    fn status_updates_follow_work_days_and_the_weekly_meeting_day() {
+        let day = |d| NaiveDate::from_ymd_opt(2026, 11, d).unwrap();
+        let mut settings = Settings::default();
+        assert_eq!(status_updates_due(&settings, day(9)), [StatusKind::Daily, StatusKind::Weekly], "a Monday");
+        assert_eq!(status_updates_due(&settings, day(10)), [StatusKind::Daily]);
+        assert!(status_updates_due(&settings, day(14)).is_empty(), "a Saturday without work hours");
+
+        settings.schedule = Some(crate::settings::WorkSchedule { days: vec![1, 5], ..Default::default() });
+        settings.automation.weekly_status_day = 4;
+        assert!(status_updates_due(&settings, day(9)).is_empty(), "Monday is off");
+        assert_eq!(status_updates_due(&settings, day(13)), [StatusKind::Weekly], "a Friday off still has its meeting");
+        assert_eq!(status_updates_due(&settings, day(14)), [StatusKind::Daily], "a worked Saturday");
+    }
 }
 
 /// Finished days back from today that the automatic journal looks at.
@@ -173,12 +189,15 @@ const WEEKLY_KEY: &str = "weekly_report_done";
 #[derive(Debug, Default, Serialize)]
 pub struct DailyRun {
     pub journals: Vec<String>,
+    /// The status updates kept for today once the run ends, such as `daily 2026-11-09`.
+    pub status_updates: Vec<String>,
     pub weekly_report: Option<String>,
     pub errors: Vec<String>,
 }
 
 /// Runs the daily automation once per local day, after the history import: journals for
-/// finished days without one, then last week's full report when it is not written yet. The day
+/// finished days without one, the status updates due today, then last week's full report when
+/// it is not written yet. The day
 /// is claimed first, so the app and the sync agent never both run it; a day that fails waits
 /// for the next one.
 /// @returns `None` when it already ran today.
@@ -192,6 +211,9 @@ pub fn run_daily(p: &crate::pipeline::Pipeline) -> Result<Option<DailyRun>> {
     let mut run = DailyRun::default();
     if settings.automation.journals && crate::infer::journal::api_key().is_some() {
         write_missing_journals(p, today, &mut run)?;
+    }
+    if settings.automation.status_updates && crate::infer::journal::api_key().is_some() {
+        write_due_status_updates(p, &settings, today, &mut run);
     }
     if settings.automation.weekly_report {
         let last_monday = crate::weekly::week_start(today) - Duration::days(7);
@@ -209,9 +231,36 @@ pub fn run_daily(p: &crate::pipeline::Pipeline) -> Result<Option<DailyRun>> {
     Ok(Some(run))
 }
 
+/// The status updates a meeting on `day` calls for: a standup on a work day (Monday to Friday
+/// when no work hours are set) and the weekly status on its weekday.
+fn status_updates_due(settings: &Settings, day: NaiveDate) -> Vec<StatusKind> {
+    let weekday = day.weekday().num_days_from_monday();
+    let works = settings.schedule.as_ref().map_or(weekday < 5, |s| s.days.contains(&weekday));
+    let mut due = Vec::new();
+    if works {
+        due.push(StatusKind::Daily);
+    }
+    if weekday == settings.automation.weekly_status_day {
+        due.push(StatusKind::Weekly);
+    }
+    due
+}
+
+/// Writes today's due status updates that are not kept yet. One that fails, such as a standup
+/// with no work sessions behind it, is reported and left for its Scrum page.
+fn write_due_status_updates(p: &crate::pipeline::Pipeline, settings: &Settings, today: NaiveDate, run: &mut DailyRun) {
+    let day = today.format("%Y-%m-%d").to_string();
+    for kind in status_updates_due(settings, today) {
+        match status_update::ensure(&p.store, kind, today) {
+            Ok(_) => run.status_updates.push(format!("{} {day}", kind.as_str())),
+            Err(err) => run.errors.push(format!("{} status {day}: {err:#}", kind.as_str())),
+        }
+    }
+}
+
 /// Journals for the finished days of the past week that have sessions and no journal written
 /// after the day ended. A journal written during its own day is rewritten; a confirmed one stays.
-fn write_missing_journals(p: &crate::pipeline::Pipeline, today: chrono::NaiveDate, run: &mut DailyRun) -> Result<()> {
+fn write_missing_journals(p: &crate::pipeline::Pipeline, today: NaiveDate, run: &mut DailyRun) -> Result<()> {
     for back in (1..=JOURNAL_DAYS).rev() {
         let date = today - Duration::days(back);
         let day = date.format("%Y-%m-%d").to_string();
@@ -227,7 +276,7 @@ fn write_missing_journals(p: &crate::pipeline::Pipeline, today: chrono::NaiveDat
 }
 
 /// The day has a confirmed journal, or one written after the day ended.
-fn has_final_journal(store: &Store, date: chrono::NaiveDate, day: &str) -> Result<bool> {
+fn has_final_journal(store: &Store, date: NaiveDate, day: &str) -> Result<bool> {
     if store.journal(day)?.is_some_and(|j| j.state == "confirmed") {
         return Ok(true);
     }

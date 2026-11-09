@@ -73,8 +73,9 @@ pub struct Journal {
 /// Every line cites the events behind it, like journal lines.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusUpdate {
-    /// `daily` (a standup on `period`) or `weekly` (the ISO week starting on `period`).
+    /// `daily` (a standup) or `weekly` (a weekly status).
     pub kind: String,
+    /// The day of the meeting the update is for.
     pub period: String,
     /// The days the done lines cover, oldest first.
     pub covers: Vec<String>,
@@ -434,7 +435,7 @@ impl Store {
         Ok(())
     }
 
-    /// The status update of `kind` (`daily` or `weekly`) for `period` (meeting day or Monday).
+    /// The status update of `kind` (`daily` or `weekly`) for the meeting on `period`.
     pub fn status_update(&self, kind: &str, period: &str) -> Result<Option<StatusUpdate>> {
         let conn = self.conn.lock().unwrap();
         Ok(conn

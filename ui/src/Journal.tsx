@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, dayKey, longDay, minutes, shiftDay, type DayView } from "./api";
-import StatusUpdate from "./StatusUpdate";
 
 type Props = { day: string; setDay: (d: string) => void; hasKey: boolean; goToSources: () => void };
 
@@ -85,9 +84,6 @@ export default function Journal({ day, setDay, hasKey, goToSources }: Props) {
           )}
         </div>
       )}
-
-      <StatusUpdate kind="daily" day={day} hasKey={hasKey} />
-      <StatusUpdate kind="weekly" day={day} hasKey={hasKey} />
 
       {view && view.achievements.length > 0 && (
         <section className="finds">

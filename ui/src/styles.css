@@ -178,9 +178,6 @@ button.icon { width: 28px; height: 28px; padding: 0; font-size: 16px; line-heigh
 .entry sup { font-size: 10px; color: var(--focus); margin-left: 2px; font-weight: 650; cursor: help; }
 .entry footer { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--rule-soft); padding-top: 14px; margin-top: 6px; font-size: 12.5px; }
 .finds h2 { font-size: 15px; margin-bottom: 10px; }
-.status-update { margin-bottom: 8px; }
-.status-update > h2 { font-size: 15px; margin-bottom: 2px; }
-.status-update > p.muted { font-size: 12.5px; margin-bottom: 10px; }
 .status-update h3 { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-2); margin: 0 0 6px; }
 .status-update ul { margin: 0 0 16px; padding-left: 18px; }
 .status-update li { font-size: 15px; line-height: 1.55; margin-bottom: 6px; }
@@ -222,6 +219,7 @@ table.mapping { border-collapse: collapse; width: 100%; font-size: 13px; }
 .mapping td { padding: 4px 6px; border-top: 1px solid var(--rule-soft); white-space: nowrap; }
 .mapping td input:not([type="checkbox"]) { width: 100%; min-width: 120px; border: 1px solid var(--rule); border-radius: 6px; padding: 4px 7px; background: var(--paper); }
 .check-line { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.check-line select { border: 1px solid var(--rule); background: var(--surface); border-radius: 7px; padding: 2px 6px; font-size: 13px; }
 .toggles { list-style: none; padding: 0; margin: 0; }
 .toggles li + li { border-top: 1px solid var(--rule-soft); }
 .toggles label { display: flex; gap: 12px; align-items: flex-start; padding: 9px 0; cursor: pointer; }
