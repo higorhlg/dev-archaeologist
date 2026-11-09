@@ -6,6 +6,11 @@
 A local-first macOS app that rebuilds what you worked on from evidence your tools already keep,
 and turns it into a timesheet, a journal and standup notes you can trust.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/timesheet-dark.png">
+  <img src="docs/screenshots/timesheet-light.png" alt="The timesheet: a week fitted to 40 hours, with a bar per day, a timeline per day and one row per entry showing its epic and ticket, project, time range and duration">
+</picture>
+
 It reads Claude Code and Codex session logs, Git history, file changes, the foreground app, your
 calendar and a small zsh hook. Fixed rules group that evidence into work sessions; nothing is
 guessed by a model. The Claude API is optional and only writes prose (journal entries, session
@@ -43,6 +48,37 @@ and each entry can show why it says what it says.
   the work side.
 - **Headless.** `dev-arch` runs the same core from the terminal, and a LaunchAgent can keep it
   syncing while the app is closed.
+
+## A look around
+
+The screenshots show a made-up week, generated from synthetic evidence.
+
+**A day.** Sessions per project on a timeline, each with the evidence behind it. Agents working in
+parallel on two projects overlap, and their shared minutes count once.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/day-dark.png">
+  <img src="docs/screenshots/day-light.png" alt="A day: a timeline with one lane per project, a find, and a list of sessions with their evidence counts">
+</picture>
+
+**The journal.** A few cited lines about the day, and its finds.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/journal-dark.png">
+  <img src="docs/screenshots/journal-light.png" alt="The journal entry for a day, each line with a citation number, and two finds below">
+</picture>
+
+**Scrum.** The daily standup and the weekly status, ready to copy into chat.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/standup-dark.png">
+  <img src="docs/screenshots/standup-light.png" alt="The daily standup: last worked day, today and blockers as short topic lines">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/weekly-dark.png">
+  <img src="docs/screenshots/weekly-light.png" alt="The weekly status: the past week, working on now and blockers as short topic lines">
+</picture>
 
 ## How it works
 
